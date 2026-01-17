@@ -1,0 +1,12 @@
+groq
+yfinance
+gnews
+feedparser
+sentence-transformers
+scikit-learn
+numpy
+pandas
+arch
+matplotlib
+tqdm
+statsmodels
