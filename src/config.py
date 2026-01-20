@@ -32,8 +32,8 @@ GROQ_MAX_TOKENS: int = 1024
 # ============================================================
 
 TICKER: str = "AAPL"
-START_DATE: str = "2024-01-01"
-END_DATE: str = "2024-12-31"
+START_DATE: str = "2024-01-01"  # 5 days of data (~5 trading days)
+END_DATE: str = "2024-01-30"    # Reduced to minimize API calls
 
 
 # ============================================================

@@ -1,0 +1,93 @@
+# =============================================================
+# Python
+# =============================================================
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# =============================================================
+# Environment Variables
+# =============================================================
+
+.env
+.env.local
+.env.*.local
+*.env
+
+# =============================================================
+# IDE / Editors
+# =============================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# =============================================================
+# OS Generated
+# =============================================================
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# =============================================================
+# Project Specific
+# =============================================================
+
+# Data files (can be regenerated)
+data/*.csv
+!data/.gitkeep
+
+# Output files
+output/
+*.png
+*.jpg
+*.jpeg
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache/
+*.cache
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
