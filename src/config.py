@@ -7,7 +7,26 @@ from typing import Optional
 
 
 # ============================================================
-# API Configuration
+# LLM Backend Configuration
+# ============================================================
+
+# Options: "groq" or "ollama"
+# Set via environment variable or change default here
+LLM_BACKEND: str = os.environ.get("LLM_BACKEND", "ollama")
+
+
+# ============================================================
+# Ollama Configuration (Local LLM)
+# ============================================================
+
+OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL: str = os.environ.get("OLLAMA_MODEL", "llama3.1")
+OLLAMA_TEMPERATURE: float = 0.0  # Deterministic outputs
+OLLAMA_MAX_TOKENS: int = 1024
+
+
+# ============================================================
+# Groq API Configuration (Cloud LLM)
 # ============================================================
 
 def get_groq_api_key() -> str:
@@ -33,7 +52,7 @@ GROQ_MAX_TOKENS: int = 1024
 
 TICKER: str = "AAPL"
 START_DATE: str = "2024-01-01"  # 5 days of data (~5 trading days)
-END_DATE: str = "2024-01-30"    # Reduced to minimize API calls
+END_DATE: str = "2025-07-01"    # Reduced to minimize API calls
 
 
 # ============================================================

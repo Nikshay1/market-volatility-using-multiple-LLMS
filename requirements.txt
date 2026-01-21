@@ -1,4 +1,5 @@
 groq
+ollama
 yfinance
 gnews
 feedparser

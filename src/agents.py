@@ -1,15 +1,25 @@
 """
 LLM Agent classes for the multi-agent debate framework.
-Uses Groq API with llama-3.3-70b-versatile model.
+Supports both Groq API (cloud) and Ollama (local) backends.
+Backend selection is controlled via config.LLM_BACKEND.
 """
 
 import json
 import time
 import re
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Union
 from abc import ABC, abstractmethod
 
-from groq import Groq
+# Conditional imports based on backend
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+
+try:
+    import ollama
+except ImportError:
+    ollama = None
 
 from . import config
 
@@ -17,7 +27,8 @@ from . import config
 class Agent(ABC):
     """
     Base class for debate agents.
-    Handles Groq API calls with retry logic and rate limiting.
+    Supports both Groq (cloud) and Ollama (local) backends.
+    Backend is selected via config.LLM_BACKEND.
     """
     
     def __init__(self, name: str, system_prompt: str):
@@ -30,17 +41,87 @@ class Agent(ABC):
         """
         self.name = name
         self.system_prompt = system_prompt
-        self._client = None
+        self._groq_client = None
+        self._backend = config.LLM_BACKEND.lower()
+        
+        # Validate backend availability
+        if self._backend == "ollama" and ollama is None:
+            raise ImportError(
+                "Ollama library not installed. Install with: pip install ollama"
+            )
+        if self._backend == "groq" and Groq is None:
+            raise ImportError(
+                "Groq library not installed. Install with: pip install groq"
+            )
+        
+        print(f"[{self.name}] Using {self._backend.upper()} backend")
     
     @property
-    def client(self) -> Groq:
+    def groq_client(self) -> 'Groq':
         """Lazy initialization of Groq client."""
-        if self._client is None:
+        if self._groq_client is None:
             api_key = config.get_groq_api_key()
-            self._client = Groq(api_key=api_key)
-        return self._client
+            self._groq_client = Groq(api_key=api_key)
+        return self._groq_client
     
-    def call_groq(self, prompt: str, max_retries: int = None) -> str:
+    def call_llm(self, prompt: str, max_retries: int = None) -> str:
+        """
+        Call the LLM (either Groq or Ollama based on config).
+        
+        Args:
+            prompt: User prompt to send
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            Response text from the model
+        """
+        if self._backend == "ollama":
+            return self._call_ollama(prompt, max_retries)
+        else:
+            return self._call_groq(prompt, max_retries)
+    
+    def _call_ollama(self, prompt: str, max_retries: int = None) -> str:
+        """
+        Call the Ollama local LLM.
+        
+        Args:
+            prompt: User prompt to send
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            Response text from the model
+        """
+        if max_retries is None:
+            max_retries = config.API_RETRY_ATTEMPTS
+        
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                # No rate limiting needed for local Ollama
+                response = ollama.chat(
+                    model=config.OLLAMA_MODEL,
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    options={
+                        "temperature": config.OLLAMA_TEMPERATURE,
+                        "num_predict": config.OLLAMA_MAX_TOKENS,
+                    }
+                )
+                
+                return response['message']['content']
+                
+            except Exception as e:
+                last_error = e
+                print(f"[{self.name}] Ollama error (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)  # Brief delay before retry
+        
+        raise RuntimeError(f"[{self.name}] Failed after {max_retries} attempts: {last_error}")
+    
+    def _call_groq(self, prompt: str, max_retries: int = None) -> str:
         """
         Call the Groq API with retry logic and rate limiting.
         
@@ -62,7 +143,7 @@ class Agent(ABC):
                 if attempt > 0:
                     time.sleep(config.API_RETRY_DELAY * (attempt + 1))
                 
-                response = self.client.chat.completions.create(
+                response = self.groq_client.chat.completions.create(
                     model=config.GROQ_MODEL,
                     messages=[
                         {"role": "system", "content": self.system_prompt},
@@ -200,8 +281,8 @@ Remember to respond with a JSON object containing:
 - "reasoning": your updated analysis as a string
 """
         
-        # Call the model
-        response = self.call_groq(prompt)
+        # Call the model (uses configured backend: Groq or Ollama)
+        response = self.call_llm(prompt)
         
         # Parse the response
         parsed = self.parse_json_response(response)
