@@ -9,5 +9,8 @@ numpy
 pandas
 arch
 matplotlib
+seaborn
 tqdm
 statsmodels
+scipy
+fredapi

@@ -1,13 +1,19 @@
 """
-LLM Agent classes for the multi-agent debate framework.
+LLM Belief Agents for Agentic Dissonance v2.
+
+Four heterogeneous agents that produce score + confidence + reasoning:
+- FundamentalAgent: Long-term valuation and risk
+- SentimentAgent: Short-term crowd psychology
+- TechnicalAgent: Trend and momentum signals
+- MacroAgent: Macroeconomic conditions
+
 Supports both Groq API (cloud) and Ollama (local) backends.
-Backend selection is controlled via config.LLM_BACKEND.
 """
 
 import json
 import time
 import re
-from typing import Dict, Optional, Any, Union
+from typing import Dict, Optional, Any, List
 from abc import ABC, abstractmethod
 
 # Conditional imports based on backend
@@ -26,9 +32,12 @@ from . import config
 
 class Agent(ABC):
     """
-    Base class for debate agents.
-    Supports both Groq (cloud) and Ollama (local) backends.
-    Backend is selected via config.LLM_BACKEND.
+    Base class for belief agents.
+    
+    All agents output:
+    - score: float in [-1, 1]
+    - confidence: float in [0, 1]
+    - reasoning: string
     """
     
     def __init__(self, name: str, system_prompt: str):
@@ -42,26 +51,12 @@ class Agent(ABC):
         self.name = name
         self.system_prompt = system_prompt
         self._groq_client = None
-        self._backend = config.LLM_BACKEND.lower()
-        
-        # Validate backend availability
-        if self._backend == "ollama" and ollama is None:
-            raise ImportError(
-                "Ollama library not installed. Install with: pip install ollama"
-            )
-        if self._backend == "groq" and Groq is None:
-            raise ImportError(
-                "Groq library not installed. Install with: pip install groq"
-            )
-        
-        print(f"[{self.name}] Using {self._backend.upper()} backend")
     
     @property
-    def groq_client(self) -> 'Groq':
+    def groq_client(self):
         """Lazy initialization of Groq client."""
-        if self._groq_client is None:
-            api_key = config.get_groq_api_key()
-            self._groq_client = Groq(api_key=api_key)
+        if self._groq_client is None and Groq is not None:
+            self._groq_client = Groq(api_key=config.get_groq_api_key())
         return self._groq_client
     
     def call_llm(self, prompt: str, max_retries: int = None) -> str:
@@ -75,30 +70,20 @@ class Agent(ABC):
         Returns:
             Response text from the model
         """
-        if self._backend == "ollama":
+        if config.LLM_BACKEND == "ollama":
             return self._call_ollama(prompt, max_retries)
         else:
             return self._call_groq(prompt, max_retries)
     
     def _call_ollama(self, prompt: str, max_retries: int = None) -> str:
-        """
-        Call the Ollama local LLM.
+        """Call the Ollama local LLM."""
+        if ollama is None:
+            raise ImportError("ollama package not installed")
         
-        Args:
-            prompt: User prompt to send
-            max_retries: Maximum number of retry attempts
-            
-        Returns:
-            Response text from the model
-        """
-        if max_retries is None:
-            max_retries = config.API_RETRY_ATTEMPTS
-        
-        last_error = None
+        max_retries = max_retries or config.API_RETRY_ATTEMPTS
         
         for attempt in range(max_retries):
             try:
-                # No rate limiting needed for local Ollama
                 response = ollama.chat(
                     model=config.OLLAMA_MODEL,
                     messages=[
@@ -107,314 +92,502 @@ class Agent(ABC):
                     ],
                     options={
                         "temperature": config.OLLAMA_TEMPERATURE,
-                        "num_predict": config.OLLAMA_MAX_TOKENS,
+                        "num_predict": config.OLLAMA_MAX_TOKENS
                     }
                 )
-                
-                return response['message']['content']
+                return response["message"]["content"]
                 
             except Exception as e:
-                last_error = e
-                print(f"[{self.name}] Ollama error (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(1)  # Brief delay before retry
+                    print(f"Ollama error (attempt {attempt + 1}): {e}")
+                    time.sleep(config.API_RETRY_DELAY)
+                else:
+                    raise
         
-        raise RuntimeError(f"[{self.name}] Failed after {max_retries} attempts: {last_error}")
+        return ""
     
     def _call_groq(self, prompt: str, max_retries: int = None) -> str:
-        """
-        Call the Groq API with retry logic and rate limiting.
+        """Call the Groq API with retry logic."""
+        if Groq is None:
+            raise ImportError("groq package not installed")
         
-        Args:
-            prompt: User prompt to send
-            max_retries: Maximum number of retry attempts
-            
-        Returns:
-            Response text from the model
-        """
-        if max_retries is None:
-            max_retries = config.API_RETRY_ATTEMPTS
-        
-        last_error = None
+        max_retries = max_retries or config.API_RETRY_ATTEMPTS
         
         for attempt in range(max_retries):
             try:
-                # Rate limiting delay
-                if attempt > 0:
-                    time.sleep(config.API_RETRY_DELAY * (attempt + 1))
-                
-                response = self.groq_client.chat.completions.create(
-                    model=config.GROQ_MODEL,
+                chat_completion = self.groq_client.chat.completions.create(
                     messages=[
                         {"role": "system", "content": self.system_prompt},
                         {"role": "user", "content": prompt}
                     ],
+                    model=config.GROQ_MODEL,
                     temperature=config.GROQ_TEMPERATURE,
-                    max_tokens=config.GROQ_MAX_TOKENS,
+                    max_tokens=config.GROQ_MAX_TOKENS
                 )
-                
-                return response.choices[0].message.content
+                return chat_completion.choices[0].message.content
                 
             except Exception as e:
-                last_error = e
-                error_msg = str(e).lower()
-                
-                # Check for rate limiting
-                if "rate" in error_msg or "limit" in error_msg or "429" in error_msg:
-                    print(f"[{self.name}] Rate limited. Waiting before retry...")
-                    time.sleep(config.RATE_LIMIT_DELAY * (attempt + 1) * 2)
+                if attempt < max_retries - 1:
+                    print(f"Groq API error (attempt {attempt + 1}): {e}")
+                    time.sleep(config.API_RETRY_DELAY)
                 else:
-                    print(f"[{self.name}] API error (attempt {attempt + 1}/{max_retries}): {e}")
+                    raise
         
-        raise RuntimeError(f"[{self.name}] Failed after {max_retries} attempts: {last_error}")
+        return ""
     
     def parse_json_response(self, response: str) -> Dict[str, Any]:
         """
         Parse JSON from the model response.
-        Handles various edge cases in LLM output.
         
-        Args:
-            response: Raw response text from the model
-            
-        Returns:
-            Parsed dictionary with 'score' and 'reasoning'
+        Expected format:
+        {
+            "score": float in [-1, 1],
+            "confidence": float in [0, 1],
+            "reasoning": string
+        }
         """
-        # Try to extract JSON from the response
         try:
-            # First, try direct parsing
-            return json.loads(response)
-        except json.JSONDecodeError:
-            pass
+            # Sanitize the response - escape control characters in strings
+            sanitized = self._sanitize_json_string(response)
+            
+            # Try direct JSON parse
+            if sanitized.strip().startswith('{'):
+                try:
+                    return self._validate_response(json.loads(sanitized))
+                except json.JSONDecodeError:
+                    pass
+            
+            # Try to find and extract JSON object
+            json_str = self._extract_json_object(response)
+            if json_str:
+                sanitized_json = self._sanitize_json_string(json_str)
+                try:
+                    return self._validate_response(json.loads(sanitized_json))
+                except json.JSONDecodeError:
+                    pass
+            
+            # Try to find JSON block in markdown
+            json_block = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+            if json_block:
+                sanitized_block = self._sanitize_json_string(json_block.group(1))
+                try:
+                    return self._validate_response(json.loads(sanitized_block))
+                except json.JSONDecodeError:
+                    pass
+            
+            # Fallback: extract values manually using regex
+            return self._extract_values_manually(response)
+            
+        except Exception as e:
+            print(f"Warning: Could not parse response from {self.name}: {e}")
+            return self._extract_values_manually(response)
+    
+    def _sanitize_json_string(self, text: str) -> str:
+        """
+        Sanitize a string to make it valid JSON by escaping control characters.
+        """
+        # First, let's handle the case where we have valid JSON with unescaped newlines
+        # We need to escape control characters inside string values only
         
-        # Try to find JSON block in markdown code blocks
-        json_pattern = r'```(?:json)?\s*(\{.*?\})\s*```'
-        matches = re.findall(json_pattern, response, re.DOTALL)
-        if matches:
-            try:
-                return json.loads(matches[0])
-            except json.JSONDecodeError:
-                pass
+        result = []
+        in_string = False
+        escape_next = False
         
-        # Try to find raw JSON object
-        json_pattern = r'\{[^{}]*"score"[^{}]*"reasoning"[^{}]*\}'
-        matches = re.findall(json_pattern, response, re.DOTALL)
-        if matches:
-            try:
-                return json.loads(matches[-1])
-            except json.JSONDecodeError:
-                pass
-        
-        # Try a more flexible pattern
-        json_pattern = r'\{.*?\}'
-        matches = re.findall(json_pattern, response, re.DOTALL)
-        for match in matches:
-            try:
-                parsed = json.loads(match)
-                if 'score' in parsed and 'reasoning' in parsed:
-                    return parsed
-            except json.JSONDecodeError:
+        for char in text:
+            if escape_next:
+                result.append(char)
+                escape_next = False
                 continue
+            
+            if char == '\\':
+                escape_next = True
+                result.append(char)
+                continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                result.append(char)
+                continue
+            
+            if in_string:
+                # Escape control characters inside strings
+                if char == '\n':
+                    result.append('\\n')
+                elif char == '\r':
+                    result.append('\\r')
+                elif char == '\t':
+                    result.append('\\t')
+                elif ord(char) < 32:
+                    result.append(f'\\u{ord(char):04x}')
+                else:
+                    result.append(char)
+            else:
+                # Outside strings, keep whitespace for formatting
+                result.append(char)
         
-        # Fallback: Try to extract score and reasoning manually
-        score_match = re.search(r'"?score"?\s*[:\s]\s*(-?[\d.]+)', response)
-        reasoning_match = re.search(r'"?reasoning"?\s*[:\s]\s*["\'](.+?)["\']', response, re.DOTALL)
+        return ''.join(result)
+    
+    def _extract_json_object(self, text: str) -> Optional[str]:
+        """
+        Extract a JSON object from text, handling nested braces.
+        """
+        # Find the first opening brace
+        start = text.find('{')
+        if start == -1:
+            return None
         
-        if score_match:
-            score = float(score_match.group(1))
-            # Clamp to [-1, 1]
-            score = max(-1.0, min(1.0, score))
-            reasoning = reasoning_match.group(1) if reasoning_match else response[:500]
-            return {
-                "score": score,
-                "reasoning": reasoning
-            }
+        # Count braces to find matching close
+        depth = 0
+        for i, char in enumerate(text[start:], start):
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[start:i+1]
         
-        # Last resort: return a default structure
-        print(f"[{self.name}] Warning: Could not parse JSON response. Using fallback.")
+        return None
+    
+    def _extract_values_manually(self, response: str) -> Dict[str, Any]:
+        """
+        Extract score, confidence, and reasoning using regex patterns.
+        """
+        # Try to find score
+        score_match = re.search(r'"?score"?\s*[:=]\s*([-+]?\d*\.?\d+)', response)
+        score = float(score_match.group(1)) if score_match else 0.0
+        
+        # Try to find confidence
+        conf_match = re.search(r'"?confidence"?\s*[:=]\s*(\d*\.?\d+)', response)
+        confidence = float(conf_match.group(1)) if conf_match else 0.5
+        
+        # Try to find reasoning - get text between "reasoning": and the next comma or brace
+        reason_match = re.search(
+            r'"?reasoning"?\s*[:=]\s*"([^"]*(?:"[^"]*)*)"',
+            response, re.DOTALL
+        )
+        if reason_match:
+            reasoning = reason_match.group(1)
+            # Unescape any escaped characters
+            reasoning = reasoning.replace('\\n', ' ').replace('\\t', ' ')
+        else:
+            # Just take a snippet of the response as reasoning
+            reasoning = response[:200].replace('\n', ' ').replace('\r', ' ')
+        
+        return self._validate_response({
+            "score": score,
+            "confidence": confidence,
+            "reasoning": reasoning
+        })
+    
+    def _validate_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and clamp response values."""
+        score = float(data.get('score', 0.0))
+        confidence = float(data.get('confidence', 0.5))
+        reasoning = str(data.get('reasoning', ''))
+        
+        # Clamp values to valid ranges
+        score = max(-1.0, min(1.0, score))
+        confidence = max(0.0, min(1.0, confidence))
+        
         return {
-            "score": 0.0,
-            "reasoning": response[:500] if len(response) > 500 else response
+            "score": score,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "agent_name": self.name
         }
     
     @abstractmethod
-    def get_analysis_prompt(self, context: str) -> str:
-        """
-        Get the analysis prompt for this agent type.
-        
-        Args:
-            context: Market and news context
-            
-        Returns:
-            Formatted prompt string
-        """
+    def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
+        """Get the analysis prompt for this agent type."""
         pass
     
     def generate_response(
         self,
         context: str,
-        prev_debate_context: Optional[str] = None
+        debate_context: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate agent response for the given context.
         
         Args:
-            context: Market and news context
-            prev_debate_context: Other agent's previous response (for debate rounds)
+            context: Market and data context
+            debate_context: Optional group feedback and other agents' reasoning
             
         Returns:
-            Dictionary with 'score' and 'reasoning'
+            Dictionary with 'score', 'confidence', 'reasoning', 'agent_name'
         """
-        # Build the prompt
-        prompt = self.get_analysis_prompt(context)
-        
-        # Add debate context if this is a subsequent round
-        if prev_debate_context:
-            prompt += f"""
-
-These are the solutions to the problem from other agents:
-{prev_debate_context}
-
-Using the opinions of other agents as additional advice, can you give an updated response?
-
-Remember to respond with a JSON object containing:
-- "score": a float between -1 (very bearish) and 1 (very bullish)
-- "reasoning": your updated analysis as a string
-"""
-        
-        # Call the model (uses configured backend: Groq or Ollama)
+        prompt = self.get_analysis_prompt(context, debate_context)
         response = self.call_llm(prompt)
-        
-        # Parse the response
-        parsed = self.parse_json_response(response)
-        
-        # Ensure score is in valid range
-        if 'score' in parsed:
-            parsed['score'] = max(-1.0, min(1.0, float(parsed['score'])))
-        
-        return parsed
+        return self.parse_json_response(response)
 
 
 class FundamentalAgent(Agent):
     """
-    Agent representing a conservative value investor.
-    Focuses on earnings, balance sheet strength, and valuation ratios.
+    Agent focusing on long-term valuation and fundamental risk.
+    
+    Analyzes: P/E ratios, revenue growth, balance sheet, margins.
+    Score meaning: Fundamental valuation attractiveness
     """
     
-    SYSTEM_PROMPT = """You are a conservative value investor focusing on earnings, balance sheet strength, valuation ratios and long-term risk.
+    SYSTEM_PROMPT = """You are a fundamental analyst focused on long-term valuation and risk.
 
-Your role is to analyze market conditions from a fundamental perspective:
-- Focus on financial metrics, earnings quality, and intrinsic value
-- Consider P/E ratios, debt levels, cash flows, and margin of safety
-- Be skeptical of momentum and short-term price movements
-- Prioritize downside protection and long-term wealth preservation
+Your role is to analyze:
+- Earnings quality and growth
+- Balance sheet strength (debt levels, cash)
+- Valuation ratios (P/E, P/B, P/S)
+- Profit margins and efficiency
+- Business model sustainability
 
-Always provide your analysis in a structured JSON format."""
+Your SCORE represents LONG-TERM VALUATION:
+- Score = +1: Extremely undervalued, strong fundamentals, low risk
+- Score = 0: Fair value, neutral outlook
+- Score = -1: Extremely overvalued, weak fundamentals, high risk
 
-    def __init__(self):
-        super().__init__(
-            name="FundamentalAgent",
-            system_prompt=self.SYSTEM_PROMPT
-        )
+Your CONFIDENCE represents how certain you are (0.0 = pure guess, 1.0 = very certain).
+
+IMPORTANT: You must respond ONLY with a valid JSON object in this exact format:
+{"score": <float -1 to 1>, "confidence": <float 0 to 1>, "reasoning": "<your analysis>"}"""
     
-    def get_analysis_prompt(self, context: str) -> str:
-        return f"""Analyze the following market data from a fundamental, value investing perspective.
+    def __init__(self):
+        super().__init__(name="Fundamental", system_prompt=self.SYSTEM_PROMPT)
+    
+    def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
+        base_prompt = f"""Analyze the following data and provide your fundamental assessment:
 
 {context}
 
-Based on your analysis, provide a market outlook as a JSON object with:
-- "score": a float between -1 (very bearish, high risk) and 1 (very bullish, low risk)
-  - Score reflects your view on forward risk and return potential
-  - Negative scores indicate concern about valuation or fundamentals
-  - Positive scores indicate favorable risk/reward
-- "reasoning": a detailed explanation of your fundamental analysis (2-4 sentences)
+Based on the fundamental data, evaluate the long-term valuation and risk."""
 
-Focus on:
-1. What do price movements suggest about underlying value?
-2. Is current volatility justifying a margin of safety?
-3. What risks are not priced into the market?
+        if debate_context:
+            base_prompt += f"""
 
-Respond ONLY with the JSON object, no additional text."""
+{debate_context}
+
+INSTRUCTION: Critique other agents' positions and defend your own analysis.
+Update your score and confidence ONLY if the group information reveals something important you missed.
+Maintain your independence - do not simply follow the crowd."""
+        
+        base_prompt += """
+
+Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
+        
+        return base_prompt
 
 
 class SentimentAgent(Agent):
     """
-    Agent representing a short-term contrarian news trader.
-    Focuses on headlines, narratives, fear, and crowd psychology.
+    Agent focusing on short-term crowd psychology and news sentiment.
+    
+    Analyzes: News headlines, market narratives, fear/greed signals.
+    Score meaning: Short-term sentiment direction
     """
     
-    SYSTEM_PROMPT = """You are a short-term contrarian news trader focusing on headlines, narratives, fear, and crowd psychology.
+    SYSTEM_PROMPT = """You are a sentiment analyst focused on crowd psychology and news impact.
 
-Your role is to analyze market sentiment and psychology:
-- Focus on news flow, narrative shifts, and crowd behavior
-- Look for signs of excessive fear or greed
-- Consider how headlines might move prices in the short term
-- Be contrarian when sentiment reaches extremes
+Your role is to analyze:
+- News headlines and narratives
+- Market fear/greed indicators
+- Crowd behavior and momentum
+- Contrarian opportunities
+- Short-term psychological factors
 
-Always provide your analysis in a structured JSON format."""
+Your SCORE represents SHORT-TERM SENTIMENT:
+- Score = +1: Extreme bullish sentiment, possible euphoria
+- Score = 0: Neutral sentiment, balanced views
+- Score = -1: Extreme bearish sentiment, possible fear
 
-    def __init__(self):
-        super().__init__(
-            name="SentimentAgent",
-            system_prompt=self.SYSTEM_PROMPT
-        )
+Your CONFIDENCE represents how certain you are (0.0 = pure guess, 1.0 = very certain).
+
+IMPORTANT: You must respond ONLY with a valid JSON object in this exact format:
+{"score": <float -1 to 1>, "confidence": <float 0 to 1>, "reasoning": "<your analysis>"}"""
     
-    def get_analysis_prompt(self, context: str) -> str:
-        return f"""Analyze the following market data and headlines from a sentiment and contrarian perspective.
+    def __init__(self):
+        super().__init__(name="Sentiment", system_prompt=self.SYSTEM_PROMPT)
+    
+    def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
+        base_prompt = f"""Analyze the following data and provide your sentiment assessment:
 
 {context}
 
-Based on your analysis, provide a market outlook as a JSON object with:
-- "score": a float between -1 (very bearish, expect decline) and 1 (very bullish, expect rise)
-  - Score reflects your near-term directional view based on sentiment
-  - Negative scores: crowd is complacent, contrarian bearish signal
-  - Positive scores: crowd is fearful, contrarian bullish signal
-- "reasoning": a detailed explanation of your sentiment analysis (2-4 sentences)
+Based on the news and market psychology, evaluate the short-term sentiment direction."""
 
-Focus on:
-1. What emotions are driving the headlines?
-2. Is the crowd positioned on one side?
-3. What contrarian opportunities exist?
+        if debate_context:
+            base_prompt += f"""
 
-Respond ONLY with the JSON object, no additional text."""
+{debate_context}
+
+INSTRUCTION: Critique other agents' positions and defend your own analysis.
+Update your score and confidence ONLY if the group information reveals something important you missed.
+Maintain your independence - do not simply follow the crowd."""
+        
+        base_prompt += """
+
+Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
+        
+        return base_prompt
 
 
-def create_agents() -> tuple:
+class TechnicalAgent(Agent):
     """
-    Factory function to create the debate agents.
+    Agent focusing on trend and momentum signals.
+    
+    Analyzes: Price action, trends, support/resistance, momentum.
+    Score meaning: Technical trend direction
+    """
+    
+    SYSTEM_PROMPT = """You are a technical analyst focused on price trends and momentum.
+
+Your role is to analyze:
+- Price trends and patterns
+- Support and resistance levels
+- Momentum indicators (implied from price action)
+- Volume and volatility patterns
+- Chart formations
+
+Your SCORE represents TREND DIRECTION:
+- Score = +1: Strong bullish trend, high momentum
+- Score = 0: Sideways/consolidation, no clear trend
+- Score = -1: Strong bearish trend, negative momentum
+
+Your CONFIDENCE represents how certain you are (0.0 = pure guess, 1.0 = very certain).
+
+IMPORTANT: You must respond ONLY with a valid JSON object in this exact format:
+{"score": <float -1 to 1>, "confidence": <float 0 to 1>, "reasoning": "<your analysis>"}"""
+    
+    def __init__(self):
+        super().__init__(name="Technical", system_prompt=self.SYSTEM_PROMPT)
+    
+    def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
+        base_prompt = f"""Analyze the following data and provide your technical assessment:
+
+{context}
+
+Based on the price action and technical indicators, evaluate the trend direction."""
+
+        if debate_context:
+            base_prompt += f"""
+
+{debate_context}
+
+INSTRUCTION: Critique other agents' positions and defend your own analysis.
+Update your score and confidence ONLY if the group information reveals something important you missed.
+Maintain your independence - do not simply follow the crowd."""
+        
+        base_prompt += """
+
+Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
+        
+        return base_prompt
+
+
+class MacroAgent(Agent):
+    """
+    Agent focusing on macroeconomic conditions.
+    
+    Analyzes: Interest rates, inflation, GDP, policy stance.
+    Score meaning: Macroeconomic risk environment
+    """
+    
+    SYSTEM_PROMPT = """You are a macro analyst focused on economic conditions and policy.
+
+Your role is to analyze:
+- Interest rate environment
+- Inflation trends
+- Economic growth (GDP)
+- Central bank policy stance
+- Yield curve signals
+- Global macro risks
+
+Your SCORE represents MACRO RISK ENVIRONMENT:
+- Score = +1: Very favorable macro conditions, low risk
+- Score = 0: Neutral conditions, balanced risks
+- Score = -1: Unfavorable macro conditions, high risk
+
+Your CONFIDENCE represents how certain you are (0.0 = pure guess, 1.0 = very certain).
+
+IMPORTANT: You must respond ONLY with a valid JSON object in this exact format:
+{"score": <float -1 to 1>, "confidence": <float 0 to 1>, "reasoning": "<your analysis>"}"""
+    
+    def __init__(self):
+        super().__init__(name="Macro", system_prompt=self.SYSTEM_PROMPT)
+    
+    def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
+        base_prompt = f"""Analyze the following data and provide your macroeconomic assessment:
+
+{context}
+
+Based on the macro indicators, evaluate the risk environment for equities."""
+
+        if debate_context:
+            base_prompt += f"""
+
+{debate_context}
+
+INSTRUCTION: Critique other agents' positions and defend your own analysis.
+Update your score and confidence ONLY if the group information reveals something important you missed.
+Maintain your independence - do not simply follow the crowd."""
+        
+        base_prompt += """
+
+Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
+        
+        return base_prompt
+
+
+def create_agents() -> List[Agent]:
+    """
+    Factory function to create all belief agents.
     
     Returns:
-        Tuple of (FundamentalAgent, SentimentAgent)
+        List of [FundamentalAgent, SentimentAgent, TechnicalAgent, MacroAgent]
     """
-    return FundamentalAgent(), SentimentAgent()
+    return [
+        FundamentalAgent(),
+        SentimentAgent(),
+        TechnicalAgent(),
+        MacroAgent()
+    ]
+
+
+def create_agents_dict() -> Dict[str, Agent]:
+    """
+    Factory function to create agents as a dictionary.
+    
+    Returns:
+        Dictionary mapping agent names to agent instances
+    """
+    agents = create_agents()
+    return {agent.name.lower(): agent for agent in agents}
 
 
 if __name__ == "__main__":
     # Test agent initialization
-    fund_agent, sent_agent = create_agents()
+    print("Testing agent creation...")
+    agents = create_agents()
     
+    for agent in agents:
+        print(f"\n{agent.name}Agent:")
+        print(f"  System prompt: {agent.system_prompt[:100]}...")
+    
+    print(f"\nCreated {len(agents)} agents successfully!")
+    
+    # Test with mock context
     test_context = """
     === Market Analysis for AAPL on 2024-06-15 ===
     
     MARKET DATA:
     - Current Price: $195.50
-    - Daily Return: 0.75%
-    - Trading Volume: 45,000,000
+    - 5-day Return: +2.3%
+    - 20-day Volatility: 18.5%
     
-    5-DAY LOOKBACK:
-    - Average Daily Return: 0.25%
-    - Volatility (Std Dev): 1.2%
-    - Cumulative Price Change: 2.5%
+    FUNDAMENTAL DATA:
+    - P/E Ratio: 28.5
+    - Revenue Growth: 8.2%
+    - Profit Margin: 25.3%
     
-    RECENT NEWS HEADLINES:
-    1. Apple announces new AI features for iPhone
-    2. Morgan Stanley raises AAPL price target
-    3. Tech stocks rally on Fed rate hopes
+    NEWS HEADLINES:
+    - "Apple announces new AI features at WWDC"
+    - "iPhone sales beat expectations in Q2"
     """
     
-    print("Testing FundamentalAgent...")
-    print(f"System prompt: {fund_agent.system_prompt[:100]}...")
-    
-    print("\nTesting SentimentAgent...")
-    print(f"System prompt: {sent_agent.system_prompt[:100]}...")
-    
-    print("\nAgents initialized successfully!")
+    print("\nTest context created. Ready for debate!")

@@ -72,6 +72,8 @@ Desktop.ini
 # Data files (can be regenerated)
 data/*.csv
 !data/.gitkeep
+data/cache/
+data/cache/*.json
 
 # Output files
 output/
