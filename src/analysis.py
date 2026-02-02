@@ -162,6 +162,12 @@ def merge_data(
     # Merge
     merged = pd.merge(dis_df, mkt_subset, on=merge_cols, how='inner')
     
+    # CHANGE: Calculate Delta Disagreement (Rate of Change)
+    # The raw level of disagreement matters less than the change in disagreement.
+    # A sudden spike in agent conflict is a stronger predictor of future volatility.
+    merged = merged.sort_values('date')
+    merged['D_conf_change'] = merged['disagreement_conf'].diff().fillna(0)
+    
     # Drop rows with missing forward volatility
     merged = merged.dropna(subset=['Forward_Volatility'])
     
@@ -657,6 +663,57 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
     return results
 
 
+def print_executive_summary(results: Dict) -> None:
+    """
+    Print a human-readable verdict on the Agentic Dissonance hypothesis.
+    
+    Interprets the statistical results for non-technical stakeholders:
+    - Did the model pass the test? (Yes/No)
+    - Is the signal significant? (p-value < 0.05)
+    - How much did error reduce? (RMSE improvement)
+    
+    Args:
+        results: Dictionary with analysis results
+    """
+    print("\n" + "="*80)
+    print("                      EXECUTIVE SUMMARY & VERDICT")
+    print("="*80)
+    
+    garch = results.get('garch_baseline')
+    garch_x = results.get('garch_x')
+    corr = results.get('correlation', {})
+    
+    if not garch or not garch_x:
+        print("  FATAL ERROR: Models failed to converge.")
+        return
+    
+    # Calculate key metrics
+    aic_diff = garch['aic'] - garch_x['aic']
+    is_better = aic_diff > 0
+    p_val = garch_x.get('exog_pval', 1.0) or 1.0
+    is_significant = p_val < 0.05
+    rmse_imp = (garch['rmse'] - garch_x['rmse']) / garch['rmse'] * 100
+    
+    print(f"\n1. HYPOTHESIS TEST")
+    print(f"   Did Agent Disagreement predict volatility better than price alone?")
+    if is_better and is_significant:
+        print(f"     PASSED. (Strong Evidence)")
+        print(f"      The Agentic Model is statistically superior (Lower AIC + Significant Signal).")
+    elif is_better:
+        print(f"     MIXED. (Weak Evidence)")
+        print(f"      The model fits better (Lower AIC), but the signal p-value is > 0.05.")
+    else:
+        print(f"     FAILED.")
+        print(f"      The baseline GARCH model performed better. Agents added noise.")
+    
+    print(f"\n2. DETAILED METRICS")
+    print(f"    AIC Improvement:      {aic_diff:+.2f}  (>0 implies agents added value)")
+    print(f"    Signal P-Value:       {p_val:.4f}  (<0.05 implies non-random correlation)")
+    print(f"    Error Reduction:      {rmse_imp:+.2f}% (Positive means lower error)")
+    print(f"    Raw Correlation:      {corr.get('corr_disagreement_conf', 0):.4f}")
+    print("="*80 + "\n")
+
+
 def print_detailed_report(results: Dict) -> None:
     """
     Print a detailed analysis report.
@@ -713,4 +770,5 @@ def print_detailed_report(results: Dict) -> None:
 
 if __name__ == "__main__":
     results = run_full_analysis(verbose=True)
+    print_executive_summary(results)
     print_detailed_report(results)

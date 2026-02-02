@@ -382,24 +382,23 @@ class SentimentAgent(Agent):
     Score meaning: Short-term sentiment direction
     """
     
-    SYSTEM_PROMPT = """You are a sentiment analyst focused on crowd psychology and news impact.
-
-Your role is to analyze:
-- News headlines and narratives
-- Market fear/greed indicators
-- Crowd behavior and momentum
-- Contrarian opportunities
-- Short-term psychological factors
-
-Your SCORE represents SHORT-TERM SENTIMENT:
-- Score = +1: Extreme bullish sentiment, possible euphoria
-- Score = 0: Neutral sentiment, balanced views
-- Score = -1: Extreme bearish sentiment, possible fear
-
-Your CONFIDENCE represents how certain you are (0.0 = pure guess, 1.0 = very certain).
-
-IMPORTANT: You must respond ONLY with a valid JSON object in this exact format:
-{"score": <float -1 to 1>, "confidence": <float 0 to 1>, "reasoning": "<your analysis>"}"""
+    SYSTEM_PROMPT = """You are a senior sentiment analyst.
+    
+    TASK: Analyze the provided news headlines for the TARGET ASSET from the LAST 7 DAYS.
+    OBJECTIVE: Determine if the narrative has materially shifted bullish or bearish for the upcoming week.
+    
+    SCORING GUIDELINES:
+    - 0.0 (Neutral/Noise): Routine corporate announcements, minor price target tweaks, or mixed news with no clear direction.
+    - Negative (-0.5 to -1.0): Lawsuits, regulatory crackdowns, major earnings misses, product delays, C-suite scandals, or supply chain disruptions.
+    - Positive (+0.5 to +1.0): Major earnings beats, new product launches, strategic partnerships, analyst upgrades, or significant expansion plans.
+    
+    CRITICAL CONSTRAINTS:
+    - Ignore intraday price action mentioned in headlines. Focus on FUNDAMENTAL news.
+    - If news is older than 7 days, ignore it.
+    
+    RESPONSE FORMAT:
+    Respond ONLY with valid JSON:
+    {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise summary of key drivers>"}"""
     
     def __init__(self):
         super().__init__(name="Sentiment", system_prompt=self.SYSTEM_PROMPT)
@@ -435,24 +434,23 @@ class TechnicalAgent(Agent):
     Score meaning: Technical trend direction
     """
     
-    SYSTEM_PROMPT = """You are a technical analyst focused on price trends and momentum.
-
-Your role is to analyze:
-- Price trends and patterns
-- Support and resistance levels
-- Momentum indicators (implied from price action)
-- Volume and volatility patterns
-- Chart formations
-
-Your SCORE represents TREND DIRECTION:
-- Score = +1: Strong bullish trend, high momentum
-- Score = 0: Sideways/consolidation, no clear trend
-- Score = -1: Strong bearish trend, negative momentum
-
-Your CONFIDENCE represents how certain you are (0.0 = pure guess, 1.0 = very certain).
-
-IMPORTANT: You must respond ONLY with a valid JSON object in this exact format:
-{"score": <float -1 to 1>, "confidence": <float 0 to 1>, "reasoning": "<your analysis>"}"""
+    SYSTEM_PROMPT = """You are a technical analyst specializing in trend following.
+    
+    TASK: Analyze the price action and volume over the LAST 5 TRADING DAYS (1 Week).
+    OBJECTIVE: Identify the dominance of the weekly trend.
+    
+    SCORING GUIDELINES:
+    - 0.0 (Consolidation): Stock is chopping sideways, inside bars, or low volume indecision.
+    - Negative (-0.5 to -1.0): Breakdown below key support, lower highs/lower lows, high-volume rejection at resistance.
+    - Positive (+0.5 to +1.0): Breakout above key resistance, higher highs/higher lows, high-volume expansion on up moves.
+    
+    STRATEGY:
+    - You are a Trend Follower. Do not try to predict tops or bottoms.
+    - Prioritize WEEKLY closes over intraday volatility.
+    
+    RESPONSE FORMAT:
+    Respond ONLY with valid JSON:
+    {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<technical setup description>"}"""
     
     def __init__(self):
         super().__init__(name="Technical", system_prompt=self.SYSTEM_PROMPT)
@@ -488,25 +486,23 @@ class MacroAgent(Agent):
     Score meaning: Macroeconomic risk environment
     """
     
-    SYSTEM_PROMPT = """You are a macro analyst focused on economic conditions and policy.
-
-Your role is to analyze:
-- Interest rate environment
-- Inflation trends
-- Economic growth (GDP)
-- Central bank policy stance
-- Yield curve signals
-- Global macro risks
-
-Your SCORE represents MACRO RISK ENVIRONMENT:
-- Score = +1: Very favorable macro conditions, low risk
-- Score = 0: Neutral conditions, balanced risks
-- Score = -1: Unfavorable macro conditions, high risk
-
-Your CONFIDENCE represents how certain you are (0.0 = pure guess, 1.0 = very certain).
-
-IMPORTANT: You must respond ONLY with a valid JSON object in this exact format:
-{"score": <float -1 to 1>, "confidence": <float 0 to 1>, "reasoning": "<your analysis>"}"""
+    SYSTEM_PROMPT = """You are a macro economist monitoring global risk conditions.
+    
+    TASK: Analyze the weekly changes in VIX (Fear), TNX (10Y Yields), Oil, and DXY (Dollar).
+    OBJECTIVE: Determine if the global environment is "Risk-On" (supportive of equities) or "Risk-Off" (defensive) for the coming week.
+    
+    SCORING GUIDELINES:
+    - 0.0 (Neutral): Mixed signals or low volatility across proxies.
+    - Negative/Risk-Off (-0.5 to -1.0): VIX spiking > 25, Yields surging rapidly (valuation headwind), Oil crashing (demand shock), or Dollar soaring (liquidity crunch).
+    - Positive/Risk-On (+0.5 to +1.0): VIX falling/stable < 20, Yields stabilizing, Dollar weakening (easier financial conditions).
+    
+    CONTEXTUAL NOTE:
+    - High VIX and strong Dollar are typically negative for risk assets.
+    - Rapidly rising yields hurt growth stock valuations.
+    
+    RESPONSE FORMAT:
+    Respond ONLY with valid JSON:
+    {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise macro thesis>"}"""
     
     def __init__(self):
         super().__init__(name="Macro", system_prompt=self.SYSTEM_PROMPT)
@@ -536,13 +532,16 @@ Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning
 
 def create_agents() -> List[Agent]:
     """
-    Factory function to create all belief agents.
+    Factory function to create belief agents.
+    
+    NOTE: FundamentalAgent removed to prevent look-ahead bias.
+    Using yfinance.info to fetch current P/E ratios for historical dates
+    would use 2026 data to predict 2018 volatility, invalidating the experiment.
     
     Returns:
-        List of [FundamentalAgent, SentimentAgent, TechnicalAgent, MacroAgent]
+        List of [SentimentAgent, TechnicalAgent, MacroAgent]
     """
     return [
-        FundamentalAgent(),
         SentimentAgent(),
         TechnicalAgent(),
         MacroAgent()

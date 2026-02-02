@@ -22,7 +22,7 @@ LLM_BACKEND: str = os.environ.get("LLM_BACKEND", "ollama")
 
 OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.environ.get("OLLAMA_MODEL", "mistral")
-OLLAMA_TEMPERATURE: float = 0.0  # Deterministic outputs
+OLLAMA_TEMPERATURE: float = 0.7  # Increased to force heterogeneity
 OLLAMA_MAX_TOKENS: int = 1024
 
 
@@ -42,8 +42,8 @@ def get_groq_api_key() -> str:
 
 
 GROQ_API_KEY: Optional[str] = os.environ.get("GROQ_API_KEY")
-GROQ_MODEL: str = "llama-3.3-70b-versatile"
-GROQ_TEMPERATURE: float = 0.0  # Deterministic outputs
+GROQ_MODEL: str = "llama-3.1-8b-instant"
+GROQ_TEMPERATURE: float = 0.7  # Increased to force heterogeneity
 GROQ_MAX_TOKENS: int = 1024
 
 
@@ -70,20 +70,22 @@ FRED_SERIES = {
 # ============================================================
 
 # Multi-asset support
-TICKER_LIST: List[str] = ["AAPL", "MSFT", "TSLA", "SPY"]
+# CHANGE: Switch to AAPL (Apple) for analysis
+TICKER_LIST: List[str] = ["AAPL"]
 DEFAULT_TICKER: str = "AAPL"  # Default for single-ticker operations
 
 # Date range for analysis
-START_DATE: str = "2024-01-01"
-END_DATE: str = "2024-12-31"
+# Covers "Funding Secured", Model 3 Ramp, COVID Crash
+START_DATE: str = "2019-07-01"
+END_DATE: str = "2020-06-10"
 
 
 # ============================================================
 # Debate Configuration
 # ============================================================
 
-DEBATE_ROUNDS: int = 2  # 2 rounds for optimal disagreement signal
-NUM_BELIEF_AGENTS: int = 4  # Fundamental, Sentiment, Technical, Macro
+DEBATE_ROUNDS: int = 2  # Optimal for signal vs noise (Round 1 = individual bias, Round 2 = social friction)
+NUM_BELIEF_AGENTS: int = 3  # Reduced (Fundamental Agent removed to prevent look-ahead bias)
 
 
 # ============================================================

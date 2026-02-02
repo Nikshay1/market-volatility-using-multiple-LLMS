@@ -134,6 +134,15 @@ def run_backtest(
             if verbose:
                 print(f"Test mode: processing {len(trading_dates)} days")
         
+        # WEEKLY FILTER: Run debates only on Fridays
+        # Rationale: Daily debates are computationally expensive and noisy.
+        # Financial volatility is "sticky" (autocorrelated). Weekly sampling
+        # captures major trends while running 5x faster.
+        original_count = len(trading_dates)
+        trading_dates = [d for d in trading_dates if d.weekday() == 4]  # 4 = Friday
+        if verbose and original_count > 0:
+            print(f"Weekly Mode: {len(trading_dates)} Fridays (filtered from {original_count} days)")
+        
         if verbose:
             print(f"Processing {len(trading_dates)} trading days")
         
@@ -181,6 +190,10 @@ def run_backtest(
                 # Save intermediate results
                 if save_intermediate:
                     _save_results(results)
+                
+                # RATE LIMITING: Sleep 12 seconds after each week to stay within API limits
+                # This allows max 5 weeks per minute (30 calls/minute) - safe for Groq free tier
+                time.sleep(12)
                 
             except Exception as e:
                 print(f"Error processing {ticker} on {date}: {e}")

@@ -226,19 +226,53 @@ def fetch_news(
     use_gnews: bool = False
 ) -> List[str]:
     """
-    Fetch news headlines for a given ticker and date.
+    Fetch historical news from local CSV to avoid look-ahead bias.
+    
+    THE "TIME MACHINE" FIX:
+    Live RSS feeds only show today's news. This function looks up a local file
+    (data/historical_news.csv) and filters for headlines that appeared on or
+    before the backtest date.
+    
+    This guarantees the agent sees "Elon tweets about taking Tesla private" on
+    Aug 7, 2018, not today's news.
     
     Args:
         ticker: Stock ticker symbol
-        date: The reference date
-        use_gnews: Whether to use gnews library (requires additional setup)
+        date: The reference date (news must be <= this date)
+        use_gnews: Ignored - kept for compatibility
         
     Returns:
-        List of headline strings
+        List of headline strings (up to 5 headlines from last 3 days)
     """
-    if use_gnews:
-        return _fetch_news_gnews(ticker, date)
-    return fetch_news_rss(ticker, date)
+    csv_path = os.path.join(config.DATA_DIR, "historical_news.csv")
+    
+    if not os.path.exists(csv_path):
+        print(f"Warning: historical_news.csv not found at {csv_path}")
+        print("Falling back to RSS. Run scripts/import_kaggle.py to create historical data.")
+        return fetch_news_rss(ticker, date)
+    
+    try:
+        # Load CSV (In production, consider caching this)
+        df = pd.read_csv(csv_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+        
+        target_date = pd.to_datetime(date).date()
+        
+        # Get news from the last 3 days (on or before target date)
+        mask = (df['Ticker'] == ticker) & \
+               (df['Date'].dt.date <= target_date) & \
+               (df['Date'].dt.date >= target_date - timedelta(days=3))
+        
+        headlines = df[mask].sort_values('Date', ascending=False)['Headline'].head(5).tolist()
+        
+        if headlines:
+            return headlines
+        else:
+            return ["No significant news found for this period."]
+            
+    except Exception as e:
+        print(f"News CSV error: {e}")
+        return fetch_news_rss(ticker, date)
 
 
 def _fetch_news_gnews(ticker: str, date: datetime) -> List[str]:
