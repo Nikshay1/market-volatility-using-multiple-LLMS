@@ -764,9 +764,15 @@ def print_detailed_report(results: Dict) -> None:
         bic_improvement = baseline['bic'] - garch_x['bic']
         rmse_improvement = (baseline['rmse'] - garch_x['rmse']) / baseline['rmse'] * 100
         
-        print(f"    AIC improvement: {aic_improvement:.2f}")
-        print(f"    BIC improvement: {bic_improvement:.2f}")
+        print(f"    GARCH RMSE:      {baseline['rmse']:.6f}")
+        print(f"    GARCH-X RMSE:    {garch_x['rmse']:.6f}")
         print(f"    RMSE improvement: {rmse_improvement:.2f}%")
+        print(f"    GARCH AIC:       {baseline['aic']:.2f}")
+        print(f"    GARCH-X AIC:     {garch_x['aic']:.2f}")
+        print(f"    AIC improvement: {aic_improvement:.2f}")
+        print(f"    GARCH BIC:       {baseline['bic']:.2f}")
+        print(f"    GARCH-X BIC:     {garch_x['bic']:.2f}")
+        print(f"    BIC improvement: {bic_improvement:.2f}")
 
 
 if __name__ == "__main__":
