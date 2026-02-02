@@ -75,9 +75,9 @@ TICKER_LIST: List[str] = ["NVDA"]
 DEFAULT_TICKER: str = "NVDA"  # Default for single-ticker operations
 
 # Date range for analysis
-# Covers "Funding Secured", Model 3 Ramp, COVID Crash
-START_DATE: str = "2017-06-01"
-END_DATE: str = "2020-06-10"
+# 2019: Critical recovery year for Nvidia after the 2018 crypto-mining crash
+START_DATE: str = "2019-01-01"
+END_DATE: str = "2020-01-01"
 
 
 # ============================================================

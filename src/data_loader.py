@@ -258,13 +258,13 @@ def fetch_news(
         
         target_date = pd.to_datetime(date).date()
         
-        # Get news from the last 7 DAYS (full week: Mon-Fri for Friday backtest)
+        # Get news from TODAY only (daily mode - most recent 24h news)
         mask = (df['Ticker'] == ticker) & \
                (df['Date'].dt.date <= target_date) & \
-               (df['Date'].dt.date >= target_date - timedelta(days=7))
+               (df['Date'].dt.date >= target_date - timedelta(days=1))
         
-        # Get up to 50 headlines from the full week (5 days × ~10/day)
-        headlines = df[mask].sort_values('Date', ascending=False)['Headline'].head(50).tolist()
+        # Get up to 10 headlines from today
+        headlines = df[mask].sort_values('Date', ascending=False)['Headline'].head(10).tolist()
         
         if headlines:
             return headlines

@@ -1,11 +1,10 @@
 """
 LLM Belief Agents for Agentic Dissonance v2.
 
-Four heterogeneous agents that produce score + confidence + reasoning:
-- FundamentalAgent: Long-term valuation and risk
-- SentimentAgent: Short-term crowd psychology
+Three heterogeneous agents that produce score + confidence + reasoning:
+- SentimentAgent: Short-term crowd psychology and news sentiment
 - TechnicalAgent: Trend and momentum signals
-- MacroAgent: Macroeconomic conditions
+- MacroAgent: Macroeconomic risk conditions
 
 Supports both Groq API (cloud) and Ollama (local) backends.
 """
@@ -321,58 +320,6 @@ class Agent(ABC):
         return self.parse_json_response(response)
 
 
-class FundamentalAgent(Agent):
-    """
-    Agent focusing on long-term valuation and fundamental risk.
-    
-    Analyzes: P/E ratios, revenue growth, balance sheet, margins.
-    Score meaning: Fundamental valuation attractiveness
-    """
-    
-    SYSTEM_PROMPT = """You are a fundamental analyst focused on long-term valuation and risk.
-
-Your role is to analyze:
-- Earnings quality and growth
-- Balance sheet strength (debt levels, cash)
-- Valuation ratios (P/E, P/B, P/S)
-- Profit margins and efficiency
-- Business model sustainability
-
-Your SCORE represents LONG-TERM VALUATION:
-- Score = +1: Extremely undervalued, strong fundamentals, low risk
-- Score = 0: Fair value, neutral outlook
-- Score = -1: Extremely overvalued, weak fundamentals, high risk
-
-Your CONFIDENCE represents how certain you are (0.0 = pure guess, 1.0 = very certain).
-
-IMPORTANT: You must respond ONLY with a valid JSON object in this exact format:
-{"score": <float -1 to 1>, "confidence": <float 0 to 1>, "reasoning": "<your analysis>"}"""
-    
-    def __init__(self):
-        super().__init__(name="Fundamental", system_prompt=self.SYSTEM_PROMPT)
-    
-    def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
-        base_prompt = f"""Analyze the following data and provide your fundamental assessment:
-
-{context}
-
-Based on the fundamental data, evaluate the long-term valuation and risk."""
-
-        if debate_context:
-            base_prompt += f"""
-
-{debate_context}
-
-INSTRUCTION: Critique other agents' positions and defend your own analysis.
-Update your score and confidence ONLY if the group information reveals something important you missed.
-Maintain your independence - do not simply follow the crowd."""
-        
-        base_prompt += """
-
-Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
-        
-        return base_prompt
-
 
 class SentimentAgent(Agent):
     """
@@ -382,23 +329,23 @@ class SentimentAgent(Agent):
     Score meaning: Short-term sentiment direction
     """
     
-    SYSTEM_PROMPT = """You are a senior sentiment analyst.
+    SYSTEM_PROMPT = """You are a high-frequency news sentiment analyst specializing in the Semiconductor sector.
     
-    TASK: Analyze the provided news headlines for the TARGET ASSET from the LAST 7 DAYS.
-    OBJECTIVE: Determine if the narrative has materially shifted bullish or bearish for the upcoming week.
+    TASK: Analyze the provided news headlines from the LAST 24 HOURS.
+    OBJECTIVE: Determine if the overnight news cycle will trigger immediate volatility for NVDA's trading session TODAY.
     
     SCORING GUIDELINES:
-    - 0.0 (Neutral/Noise): Routine corporate announcements, minor price target tweaks, or mixed news with no clear direction.
-    - Negative (-0.5 to -1.0): Lawsuits, regulatory crackdowns, major earnings misses, product delays, C-suite scandals, or supply chain disruptions.
-    - Positive (+0.5 to +1.0): Major earnings beats, new product launches, strategic partnerships, analyst upgrades, or significant expansion plans.
+    - 0.0 (Neutral/Noise): Routine partnership announcements, product recaps without financial details, or unrelated sector news.
+    - Negative (-0.5 to -1.0): "Crypto Winter" headlines (mining demand crashing), inventory oversupply, analyst downgrades, or data center capex cuts.
+    - Positive (+0.5 to +1.0): "Crypto Recovery" signs, massive data center orders, new GPU architecture reveals (e.g., Ampere leaks), or analyst upgrades.
     
     CRITICAL CONSTRAINTS:
-    - Ignore intraday price action mentioned in headlines. Focus on FUNDAMENTAL news.
-    - If news is older than 7 days, ignore it.
+    - IGNORE news older than 24 hours.
+    - Focus on MOMENTUM: Does this news change the psychological state of the market *right now*?
     
     RESPONSE FORMAT:
     Respond ONLY with valid JSON:
-    {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise summary of key drivers>"}"""
+    {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise summary of drivers>"}"""
     
     def __init__(self):
         super().__init__(name="Sentiment", system_prompt=self.SYSTEM_PROMPT)
@@ -434,19 +381,19 @@ class TechnicalAgent(Agent):
     Score meaning: Technical trend direction
     """
     
-    SYSTEM_PROMPT = """You are a technical analyst specializing in trend following.
+    SYSTEM_PROMPT = """You are a swing trading technical analyst focused on daily momentum.
     
-    TASK: Analyze the price action and volume over the LAST 5 TRADING DAYS (1 Week).
-    OBJECTIVE: Identify the dominance of the weekly trend.
+    TASK: Analyze the price action of the PREVIOUS TRADING DAY.
+    OBJECTIVE: Predict volatility for the UPCOMING SESSION based on yesterday's close.
     
     SCORING GUIDELINES:
-    - 0.0 (Consolidation): Stock is chopping sideways, inside bars, or low volume indecision.
-    - Negative (-0.5 to -1.0): Breakdown below key support, lower highs/lower lows, high-volume rejection at resistance.
-    - Positive (+0.5 to +1.0): Breakout above key resistance, higher highs/higher lows, high-volume expansion on up moves.
+    - 0.0 (Inside Day/Consolidation): Low volume doji, trading within the previous day's range. Volatility is contracting.
+    - Negative (-0.5 to -1.0): Bearish Engulfing candle, closing near the lows of the day, or high-volume rejection at resistance. (Expect follow-through selling).
+    - Positive (+0.5 to +1.0): Bullish Engulfing candle, closing near the highs, or a "Gap Up" on high volume. (Expect momentum continuation).
     
     STRATEGY:
-    - You are a Trend Follower. Do not try to predict tops or bottoms.
-    - Prioritize WEEKLY closes over intraday volatility.
+    - Trend is your friend. If yesterday was a strong trend day, assume continuation volatility.
+    - If yesterday was a tight range, assume mean reversion (Low Score).
     
     RESPONSE FORMAT:
     Respond ONLY with valid JSON:
@@ -486,19 +433,19 @@ class MacroAgent(Agent):
     Score meaning: Macroeconomic risk environment
     """
     
-    SYSTEM_PROMPT = """You are a macro economist monitoring global risk conditions.
+    SYSTEM_PROMPT = """You are a macro-risk analyst monitoring daily liquidity and sector rotation.
     
-    TASK: Analyze the weekly changes in VIX (Fear), TNX (10Y Yields), Oil, and DXY (Dollar).
-    OBJECTIVE: Determine if the global environment is "Risk-On" (supportive of equities) or "Risk-Off" (defensive) for the coming week.
+    TASK: Analyze the DAILY % CHANGE in the following proxies:
+    1. VIX (Market Fear): >5% spike = Risk Off.
+    2. SOXX (Semiconductor ETF): Is the sector leading or lagging?
+    3. BTC (Bitcoin): A proxy for GPU mining demand/sentiment in 2019.
+    
+    OBJECTIVE: Determine if today is a "Risk-On" (Buy Tech) or "Risk-Off" (Sell Tech) session.
     
     SCORING GUIDELINES:
-    - 0.0 (Neutral): Mixed signals or low volatility across proxies.
-    - Negative/Risk-Off (-0.5 to -1.0): VIX spiking > 25, Yields surging rapidly (valuation headwind), Oil crashing (demand shock), or Dollar soaring (liquidity crunch).
-    - Positive/Risk-On (+0.5 to +1.0): VIX falling/stable < 20, Yields stabilizing, Dollar weakening (easier financial conditions).
-    
-    CONTEXTUAL NOTE:
-    - High VIX and strong Dollar are typically negative for risk assets.
-    - Rapidly rising yields hurt growth stock valuations.
+    - 0.0 (Neutral): Mixed signals (e.g., VIX flat, Tech flat).
+    - Negative (-0.5 to -1.0): VIX spiking >5%, Bitcoin crashing >5% (implies miner capitulation), or Broad market sell-off.
+    - Positive (+0.5 to +1.0): VIX collapsing, Bitcoin rallying (implies mining profitability), or Risk-on rotation into Tech/Semis.
     
     RESPONSE FORMAT:
     Respond ONLY with valid JSON:
@@ -533,10 +480,6 @@ Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning
 def create_agents() -> List[Agent]:
     """
     Factory function to create belief agents.
-    
-    NOTE: FundamentalAgent removed to prevent look-ahead bias.
-    Using yfinance.info to fetch current P/E ratios for historical dates
-    would use 2026 data to predict 2018 volatility, invalidating the experiment.
     
     Returns:
         List of [SentimentAgent, TechnicalAgent, MacroAgent]

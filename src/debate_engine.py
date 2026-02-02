@@ -1,10 +1,12 @@
 """
 Debate engine for Agentic Dissonance v2.
 
-Implements 2-round debate protocol with social feedback:
-1. Round 1: All 4 agents produce independent beliefs
-2. Aggregator computes confidence-weighted mean and variance
-3. Round 2: Agents see other agents' reasoning + group stats, update beliefs
+Implements "Blind & Battle" 2-round debate protocol:
+1. Round 1 (BLIND VOTE): Agents analyze in isolation, see only their data
+2. Round 2 (CRITIQUE): Each agent sees ONLY their most opposing argument
+   - No mean score shown (prevents herding)
+   - Forces agents to attack specific logic
+   - Preserves disagreement signal for volatility prediction
 """
 
 import time
@@ -22,14 +24,15 @@ from . import config
 
 class DebateRoom:
     """
-    Orchestrates multi-round debates between 4 belief agents.
+    Orchestrates multi-round debates between belief agents.
     
-    Protocol:
+    "Blind & Battle" Protocol:
     1. Infobots inject data into context
-    2. Round 1: Independent belief generation
-    3. Aggregator computes mean + variance
-    4. Round 2: Agents see group feedback, update beliefs
-    5. Final metrics computed
+    2. Round 1 (BLIND VOTE): Independent belief generation - NO group info
+    3. Round 2 (CRITIQUE): Each agent attacks their most opposing argument
+    4. Final disagreement = Standard Deviation after the fight
+       - High SD = Market confused = High Volatility
+       - Low SD = Market agrees = Low Volatility
     """
     
     def __init__(
@@ -139,32 +142,78 @@ class DebateRoom:
             if verbose:
                 print(f"\n--- Round {round_num}/{self.num_rounds} ---")
             
-            # Prepare debate context for round 2+
-            debate_context = None
-            if round_num > 1 and agent_outputs:
-                # Compute aggregator stats from previous round
-                stats = self.aggregator.compute_statistics(agent_outputs)
-                debate_context = self.aggregator.format_group_summary(stats, agent_outputs)
+            # ================================================================
+            # BLIND & BATTLE PROTOCOL
+            # ================================================================
+            # Round 1: BLIND VOTE - Agents see only their data, no group info
+            # Round 2: CRITIQUE - Each agent sees ONLY their opposing argument
+            # ================================================================
             
-            # Get responses from all agents
             round_outputs = []
-            for agent in self.agents:
-                # Check cache first
-                cached = self._load_cached_response(date, round_num, agent.name)
-                if cached:
-                    response = cached
-                    if verbose:
-                        print(f"  {agent.name}: score={response.get('score', 0):.3f} (cached)")
-                else:
-                    response = agent.generate_response(full_context, debate_context)
-                    self._save_cached_response(date, round_num, agent.name, response)
-                    if verbose:
-                        print(f"  {agent.name}: score={response.get('score', 0):.3f}, conf={response.get('confidence', 0):.3f}")
+            
+            if round_num == 1:
+                # ============================================================
+                # ROUND 1: BLIND VOTE (Isolation)
+                # Agents generate scores purely from their data source
+                # Goal: Maximize initial variance
+                # ============================================================
+                if verbose:
+                    print("  [BLIND VOTE] Agents analyzing in isolation...")
                 
-                round_outputs.append(response)
+                for agent in self.agents:
+                    # Check cache first
+                    cached = self._load_cached_response(date, round_num, agent.name)
+                    if cached:
+                        response = cached
+                        if verbose:
+                            print(f"  {agent.name}: score={response.get('score', 0):.3f} (cached)")
+                    else:
+                        # NO debate context - pure blind vote
+                        response = agent.generate_response(full_context, debate_context=None)
+                        response['agent_name'] = agent.name  # Tag for opposing argument matching
+                        self._save_cached_response(date, round_num, agent.name, response)
+                        if verbose:
+                            print(f"  {agent.name}: score={response.get('score', 0):.3f}, conf={response.get('confidence', 0):.3f}")
+                    
+                    round_outputs.append(response)
+                    time.sleep(config.RATE_LIMIT_DELAY)
+            
+            else:
+                # ============================================================
+                # ROUND 2+: CRITIQUE (Battle Mode)
+                # Each agent sees ONLY their most opposing argument
+                # Goal: Force defense of positions, not herding to mean
+                # ============================================================
+                if verbose:
+                    print("  [CRITIQUE] Agents attacking opposing arguments...")
                 
-                # Rate limit between agent calls
-                time.sleep(config.RATE_LIMIT_DELAY)
+                for i, agent in enumerate(self.agents):
+                    # Check cache first
+                    cached = self._load_cached_response(date, round_num, agent.name)
+                    if cached:
+                        response = cached
+                        if verbose:
+                            print(f"  {agent.name}: score={response.get('score', 0):.3f} (cached)")
+                    else:
+                        # Get this agent's Round 1 output
+                        agent_r1_output = agent_outputs[i]
+                        agent_r1_output['agent_name'] = agent.name
+                        
+                        # Generate OPPOSING ARGUMENT (not mean!) for this agent
+                        critique_context = self.aggregator.format_opposing_argument(
+                            agent_r1_output, 
+                            agent_outputs
+                        )
+                        
+                        response = agent.generate_response(full_context, critique_context)
+                        response['agent_name'] = agent.name
+                        self._save_cached_response(date, round_num, agent.name, response)
+                        
+                        if verbose:
+                            print(f"  {agent.name}: score={response.get('score', 0):.3f}, conf={response.get('confidence', 0):.3f}")
+                    
+                    round_outputs.append(response)
+                    time.sleep(config.RATE_LIMIT_DELAY)
             
             # Store round data
             rounds_data.append({

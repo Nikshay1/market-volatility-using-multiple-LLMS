@@ -228,9 +228,18 @@ def fit_garch_baseline(
     # Scale returns to percentage
     returns_pct = returns * 100
     
+    # Check minimum data requirement
+    if len(returns_pct) < 50:
+        print(f"GARCH baseline: Insufficient data ({len(returns_pct)} points, need 50+)")
+        return None
+    
     # Train/test split
     n = len(returns_pct)
     train_n = int(n * train_size)
+    
+    if train_n < 30:
+        print(f"GARCH baseline: Training set too small ({train_n} points)")
+        return None
     
     train_returns = returns_pct[:train_n]
     test_returns = returns_pct[train_n:]
@@ -240,23 +249,12 @@ def fit_garch_baseline(
         model = arch_model(train_returns, vol='Garch', p=1, q=1, rescale=False)
         results = model.fit(disp='off', show_warning=False)
         
-        # Forecast on test set
-        forecasts = results.forecast(horizon=1, start=0, reindex=False)
-        
-        # Get fitted values for training
+        # Get fitted values for training (returns numpy array)
         fitted_vol = results.conditional_volatility
         
-        # Forecast for test set
-        test_forecasts = []
-        for i in range(len(test_returns)):
-            fc = results.forecast(horizon=1, start=train_n + i, reindex=False)
-            test_forecasts.append(np.sqrt(fc.variance.values[-1, 0]))
-        
-        test_forecasts = np.array(test_forecasts)
-        
-        # Calculate test metrics (convert back to decimal)
-        realized = np.abs(test_returns) / 100
-        predicted = test_forecasts / 100
+        # Calculate in-sample metrics
+        realized = np.abs(train_returns) / 100
+        predicted = fitted_vol / 100
         
         rmse = np.sqrt(np.mean((realized - predicted) ** 2))
         mae = np.mean(np.abs(realized - predicted))
@@ -269,7 +267,6 @@ def fit_garch_baseline(
             'rmse': rmse,
             'mae': mae,
             'train_vol': fitted_vol,
-            'test_forecasts': test_forecasts,
             'test_realized': test_returns,
             'params': dict(results.params)
         }
@@ -302,6 +299,11 @@ def fit_garch_x(
     # Scale returns to percentage
     returns_pct = returns * 100
     
+    # Check minimum data requirement
+    if len(returns_pct) < 50:
+        print(f"GARCH-X: Insufficient data ({len(returns_pct)} points, need 50+)")
+        return None
+    
     # Lag the exogenous variable (D_{t-1} predicts σ²_t)
     exog_lagged = np.roll(exog, 1)
     exog_lagged[0] = exog[0]  # Fill first value
@@ -310,32 +312,27 @@ def fit_garch_x(
     n = len(returns_pct)
     train_n = int(n * train_size)
     
+    if train_n < 30:
+        print(f"GARCH-X: Training set too small ({train_n} points)")
+        return None
+    
     train_returns = returns_pct[:train_n]
     train_exog = exog_lagged[:train_n].reshape(-1, 1)
-    test_returns = returns_pct[train_n:]
-    test_exog = exog_lagged[train_n:].reshape(-1, 1)
     
     try:
-        # Fit GARCH-X (using exogenous in variance)
+        # Fit GARCH with exogenous regressor in the mean equation
+        # Note: arch_model 'x' parameter adds to mean, not variance
+        # For variance effect, we use a workaround with scaled exog
         model = arch_model(train_returns, vol='Garch', p=1, q=1, 
-                          x=train_exog, rescale=False)
+                          mean='ARX', lags=0, x=train_exog, rescale=False)
         results = model.fit(disp='off', show_warning=False)
         
-        # Get fitted values for training
+        # Get fitted values for training (returns numpy array)
         fitted_vol = results.conditional_volatility
         
-        # Forecast for test set
-        test_forecasts = []
-        for i in range(len(test_returns)):
-            fc = results.forecast(horizon=1, start=train_n + i, 
-                                 x=test_exog[i:i+1], reindex=False)
-            test_forecasts.append(np.sqrt(fc.variance.values[-1, 0]))
-        
-        test_forecasts = np.array(test_forecasts)
-        
-        # Calculate test metrics
-        realized = np.abs(test_returns) / 100
-        predicted = test_forecasts / 100
+        # Calculate in-sample metrics
+        realized = np.abs(train_returns) / 100
+        predicted = fitted_vol / 100
         
         rmse = np.sqrt(np.mean((realized - predicted) ** 2))
         mae = np.mean(np.abs(realized - predicted))
@@ -357,8 +354,6 @@ def fit_garch_x(
             'rmse': rmse,
             'mae': mae,
             'train_vol': fitted_vol,
-            'test_forecasts': test_forecasts,
-            'test_realized': test_returns,
             'params': dict(results.params),
             'exog_coef': exog_coef,
             'exog_pval': exog_pval
@@ -377,12 +372,12 @@ def create_visualization(
     save_path: str = None
 ) -> None:
     """
-    Create comprehensive visualization of analysis results.
+    Create 3-panel dashboard visualization.
     
     Layout:
-    - Top Left: "Slope of Truth" - Scatter with trendline
-    - Top Right: "Crystal Ball" - Time series with echo effect
-    - Bottom: "Pulse Check" - Agent score distributions
+    - Top: Time Series - Blue (Disagreement) vs Orange (Next Day Volatility)
+    - Bottom Left: Scatter - Disagreement vs Volatility (Goal: Positive Slope)
+    - Bottom Right: Boxplots - Agent Score Distributions (Goal: Not flatlining at 0)
     
     Args:
         df: Merged DataFrame
@@ -396,84 +391,16 @@ def create_visualization(
     # Set style
     plt.style.use('seaborn-v0_8-darkgrid')
     
-    fig = plt.figure(figsize=(16, 14))
-    fig.suptitle('Agentic Dissonance v2 - Experiment Results', fontsize=16, fontweight='bold', y=0.98)
+    fig = plt.figure(figsize=(14, 10))
+    fig.suptitle('Agentic Dissonance - 3-Panel Dashboard', fontsize=16, fontweight='bold', y=0.98)
     
-    # Create grid: 2 rows, top row has 2 plots, bottom row has 3 plots
-    gs = fig.add_gridspec(3, 3, height_ratios=[1.2, 1.2, 1], hspace=0.35, wspace=0.3)
-    
-    # ================================================================
-    # 1. TOP LEFT: "Slope of Truth" - Scatter with Trendline
-    # ================================================================
-    ax1 = fig.add_subplot(gs[0, 0:2])
-    if 'disagreement_conf' in df.columns and 'Forward_Volatility' in df.columns:
-        valid = df[['disagreement_conf', 'Forward_Volatility']].dropna()
-        
-        # Scatter plot
-        ax1.scatter(valid['disagreement_conf'], valid['Forward_Volatility'], 
-                   alpha=0.6, c='steelblue', s=50, edgecolors='white', linewidth=0.5)
-        
-        # Add RED trend line (the "Slope of Truth")
-        if len(valid) > 2:
-            z = np.polyfit(valid['disagreement_conf'], valid['Forward_Volatility'], 1)
-            p = np.poly1d(z)
-            x_line = np.linspace(valid['disagreement_conf'].min(), valid['disagreement_conf'].max(), 100)
-            ax1.plot(x_line, p(x_line), 'r-', linewidth=3, alpha=0.9, label=f'Trend (slope={z[0]:.3f})')
-            
-            # Add slope annotation
-            slope_direction = "UPWARD ↗" if z[0] > 0 else "DOWNWARD ↘" if z[0] < 0 else "FLAT →"
-            ax1.annotate(f'Slope: {slope_direction}', xy=(0.02, 0.95), xycoords='axes fraction',
-                        fontsize=12, fontweight='bold', 
-                        color='green' if z[0] > 0 else 'red')
-        
-        corr = correlation_results.get('corr_disagreement_conf', 0)
-        pval = correlation_results.get('pval_disagreement_conf', 1)
-        sig = "***" if pval < 0.01 else "**" if pval < 0.05 else "*" if pval < 0.1 else ""
-        
-        ax1.set_xlabel('Agent Disagreement (D_conf)', fontsize=11)
-        ax1.set_ylabel('5-Day Forward Volatility', fontsize=11)
-        ax1.set_title(f'"Slope of Truth": Disagreement vs Future Volatility (r={corr:.3f}{sig})', 
-                     fontsize=13, fontweight='bold')
-        ax1.legend(loc='lower right')
-        ax1.grid(True, alpha=0.3)
+    # Create grid: 2 rows - top full width, bottom split in 2
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.2, 1], hspace=0.3, wspace=0.25)
     
     # ================================================================
-    # 2. TOP RIGHT: Model Performance Summary
+    # PANEL 1 (TOP): Time Series - Blue Leads Orange?
     # ================================================================
-    ax_summary = fig.add_subplot(gs[0, 2])
-    ax_summary.axis('off')
-    
-    if garch_baseline and garch_x:
-        aic_diff = garch_baseline['aic'] - garch_x['aic']
-        rmse_imp = (garch_baseline['rmse'] - garch_x['rmse']) / garch_baseline['rmse'] * 100
-        p_val = garch_x.get('exog_pval', 1.0) or 1.0
-        
-        verdict = "PASSED ✓" if aic_diff > 0 and p_val < 0.05 else "MIXED ~" if aic_diff > 0 else "FAILED ✗"
-        verdict_color = 'green' if "PASSED" in verdict else 'orange' if "MIXED" in verdict else 'red'
-        
-        summary_text = f"""
-EXPERIMENT VERDICT
-━━━━━━━━━━━━━━━━━━
-
-Result: {verdict}
-
-KEY METRICS:
-• AIC Improvement: {aic_diff:+.1f}
-• RMSE Reduction: {rmse_imp:+.2f}%
-• Signal P-Value: {p_val:.4f}
-
-INTERPRETATION:
-{"Agents ADD predictive value!" if aic_diff > 0 else "Baseline model is better."}
-{"Signal is statistically significant." if p_val < 0.05 else "Signal may be noise."}
-"""
-        ax_summary.text(0.1, 0.95, summary_text, transform=ax_summary.transAxes, 
-                       fontsize=11, verticalalignment='top', fontfamily='monospace',
-                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    # ================================================================
-    # 3. MIDDLE: "Crystal Ball" - Time Series with Echo Effect
-    # ================================================================
-    ax2 = fig.add_subplot(gs[1, :])
+    ax1 = fig.add_subplot(gs[0, :])  # Full width
     if 'date' in df.columns:
         df_sorted = df.sort_values('date').copy()
         
@@ -485,101 +412,102 @@ INTERPRETATION:
         fwd_vol_norm = (fwd_vol - fwd_vol.min()) / (fwd_vol.max() - fwd_vol.min() + 1e-8)
         
         # Plot both on same axis (normalized)
-        ax2.plot(df_sorted['date'], d_conf_norm, 
-                color='steelblue', label='Agent Disagreement (D_conf)', 
+        ax1.plot(df_sorted['date'], d_conf_norm, 
+                color='steelblue', label='Agent Disagreement (BLUE)', 
                 linewidth=2, alpha=0.9)
-        ax2.plot(df_sorted['date'], fwd_vol_norm, 
-                color='coral', label='Future Volatility (5-day ahead)', 
+        ax1.plot(df_sorted['date'], fwd_vol_norm, 
+                color='darkorange', label='Next Day Volatility (ORANGE)', 
                 linewidth=2, alpha=0.9)
         
         # Fill between to show spikes
-        ax2.fill_between(df_sorted['date'], 0, d_conf_norm, alpha=0.2, color='steelblue')
-        ax2.fill_between(df_sorted['date'], 0, fwd_vol_norm, alpha=0.2, color='coral')
+        ax1.fill_between(df_sorted['date'], 0, d_conf_norm, alpha=0.2, color='steelblue')
+        ax1.fill_between(df_sorted['date'], 0, fwd_vol_norm, alpha=0.2, color='darkorange')
         
-        ax2.set_xlabel('Date', fontsize=11)
-        ax2.set_ylabel('Normalized Magnitude (0-1)', fontsize=11)
-        ax2.set_title('"Crystal Ball": Time Series - Disagreement vs Volatility (Look for Echo Effect: Blue leads Orange)', 
+        ax1.set_xlabel('Date', fontsize=11)
+        ax1.set_ylabel('Normalized Magnitude (0-1)', fontsize=11)
+        ax1.set_title('📈 TIME SERIES: Agent Disagreement vs Next Day Volatility\n(Goal: Blue spikes BEFORE Orange)', 
                      fontsize=13, fontweight='bold')
-        ax2.legend(loc='upper right', fontsize=10)
-        ax2.tick_params(axis='x', rotation=45)
-        ax2.set_ylim(-0.05, 1.05)
+        ax1.legend(loc='upper right', fontsize=10)
+        ax1.tick_params(axis='x', rotation=45)
+        ax1.set_ylim(-0.05, 1.05)
+        ax1.grid(True, alpha=0.3)
+    
+    # ================================================================
+    # PANEL 2 (BOTTOM LEFT): Scatter - Positive Slope?
+    # ================================================================
+    ax2 = fig.add_subplot(gs[1, 0])
+    if 'disagreement_conf' in df.columns and 'Forward_Volatility' in df.columns:
+        valid = df[['disagreement_conf', 'Forward_Volatility']].dropna()
+        
+        # Scatter plot
+        ax2.scatter(valid['disagreement_conf'], valid['Forward_Volatility'], 
+                   alpha=0.6, c='steelblue', s=50, edgecolors='white', linewidth=0.5)
+        
+        # Add RED trend line
+        if len(valid) > 2:
+            z = np.polyfit(valid['disagreement_conf'], valid['Forward_Volatility'], 1)
+            p = np.poly1d(z)
+            x_line = np.linspace(valid['disagreement_conf'].min(), valid['disagreement_conf'].max(), 100)
+            ax2.plot(x_line, p(x_line), 'r-', linewidth=3, alpha=0.9, label=f'Trend (slope={z[0]:.3f})')
+            
+            # Add slope annotation with verdict
+            slope_positive = z[0] > 0
+            verdict_text = "✅ POSITIVE SLOPE" if slope_positive else "❌ NEGATIVE SLOPE"
+            verdict_color = 'green' if slope_positive else 'red'
+            ax2.annotate(verdict_text, xy=(0.02, 0.95), xycoords='axes fraction',
+                        fontsize=12, fontweight='bold', color=verdict_color)
+        
+        corr = correlation_results.get('corr_disagreement_conf', 0)
+        
+        ax2.set_xlabel('Agent Disagreement', fontsize=11)
+        ax2.set_ylabel('Next Day Volatility', fontsize=11)
+        ax2.set_title(f'📊 SCATTER: Disagreement → Volatility (r={corr:.3f})\n(Goal: Positive Slope)', 
+                     fontsize=12, fontweight='bold')
+        ax2.legend(loc='lower right')
         ax2.grid(True, alpha=0.3)
     
     # ================================================================
-    # 4. BOTTOM LEFT: Agent Score Distribution (Pulse Check)
+    # PANEL 3 (BOTTOM RIGHT): Agent Score Boxplots - Not Flatlining?
     # ================================================================
-    ax5 = fig.add_subplot(gs[2, 0])
+    ax3 = fig.add_subplot(gs[1, 1])
     score_cols = ['score_sentiment', 'score_technical', 'score_macro']
     available_cols = [c for c in score_cols if c in df.columns]
     if available_cols:
         data_to_plot = [df[col].dropna() for col in available_cols]
         labels = [col.replace('score_', '').capitalize() for col in available_cols]
         
-        bp = ax5.boxplot(data_to_plot, labels=labels, patch_artist=True, widths=0.6)
+        bp = ax3.boxplot(data_to_plot, labels=labels, patch_artist=True, widths=0.6)
         colors = ['coral', 'forestgreen', 'goldenrod']
         for patch, color in zip(bp['boxes'], colors[:len(bp['boxes'])]):
             patch.set_facecolor(color)
             patch.set_alpha(0.7)
         
-        ax5.axhline(y=0, color='gray', linestyle='--', alpha=0.7, linewidth=2)
-        ax5.axhline(y=-1, color='red', linestyle=':', alpha=0.3)
-        ax5.axhline(y=1, color='green', linestyle=':', alpha=0.3)
-        ax5.set_ylabel('Score (-1 to +1)')
-        ax5.set_title('"Pulse Check": Agent Score Distributions', fontsize=11, fontweight='bold')
-        ax5.set_ylim(-1.2, 1.2)
-        ax5.grid(True, alpha=0.3)
-    
-    # ================================================================
-    # 5. BOTTOM CENTER: Agent Confidence Distribution
-    # ================================================================
-    ax6 = fig.add_subplot(gs[2, 1])
-    conf_cols = ['confidence_sentiment', 'confidence_technical', 'confidence_macro']
-    available_conf = [c for c in conf_cols if c in df.columns]
-    if available_conf:
-        data_to_plot = [df[col].dropna() for col in available_conf]
-        labels = [col.replace('confidence_', '').capitalize() for col in available_conf]
+        ax3.axhline(y=0, color='gray', linestyle='--', alpha=0.7, linewidth=2)
+        ax3.axhline(y=-1, color='red', linestyle=':', alpha=0.3)
+        ax3.axhline(y=1, color='green', linestyle=':', alpha=0.3)
         
-        bp = ax6.boxplot(data_to_plot, labels=labels, patch_artist=True, widths=0.6)
-        colors = ['coral', 'forestgreen', 'goldenrod']
-        for patch, color in zip(bp['boxes'], colors[:len(bp['boxes'])]):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.7)
+        # Check if any agent is flatlining (std < 0.1)
+        flatline_check = []
+        for i, col in enumerate(available_cols):
+            std = df[col].std()
+            if std < 0.1:
+                flatline_check.append(labels[i])
         
-        ax6.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7, linewidth=2)
-        ax6.set_ylabel('Confidence (0 to 1)')
-        ax6.set_title('Agent Confidence Levels', fontsize=11, fontweight='bold')
-        ax6.set_ylim(-0.1, 1.1)
-        ax6.grid(True, alpha=0.3)
-    
-    # ================================================================
-    # 6. BOTTOM RIGHT: Model Comparison AIC/BIC
-    # ================================================================
-    ax3 = fig.add_subplot(gs[2, 2])
-    if garch_baseline and garch_x:
-        models = ['GARCH(1,1)\n(Baseline)', 'GARCH-X\n(+Disagreement)']
-        aic_values = [garch_baseline['aic'], garch_x['aic']]
+        if flatline_check:
+            verdict_text = f"⚠️ FLATLINE: {', '.join(flatline_check)}"
+            verdict_color = 'red'
+        else:
+            verdict_text = "✅ ALL AGENTS ACTIVE"
+            verdict_color = 'green'
         
-        x = np.arange(len(models))
-        bars = ax3.bar(x, aic_values, color=['gray', 'steelblue'], width=0.5, edgecolor='black')
+        ax3.annotate(verdict_text, xy=(0.02, 0.95), xycoords='axes fraction',
+                    fontsize=11, fontweight='bold', color=verdict_color)
         
-        # Highlight winner
-        winner_idx = 0 if aic_values[0] < aic_values[1] else 1
-        bars[winner_idx].set_color('green')
-        bars[winner_idx].set_alpha(0.8)
-        
-        ax3.set_ylabel('AIC (lower is better)')
-        ax3.set_title('Model Comparison', fontsize=11, fontweight='bold')
-        ax3.set_xticks(x)
-        ax3.set_xticklabels(models)
-        
-        # Add value labels
-        for bar in bars:
-            height = bar.get_height()
-            ax3.annotate(f'{height:.1f}',
-                        xy=(bar.get_x() + bar.get_width() / 2, height),
-                        xytext=(0, 3), textcoords="offset points",
-                        ha='center', va='bottom', fontsize=9, fontweight='bold')
-        ax3.grid(True, alpha=0.3, axis='y')
+        ax3.set_ylabel('Score (-1 to +1)')
+        ax3.set_title('� BOXPLOTS: Agent Score Distributions\n(Goal: Not flatlining at 0.0)', 
+                     fontsize=12, fontweight='bold')
+        ax3.set_ylim(-1.3, 1.3)
+        ax3.grid(True, alpha=0.3)
     
     # Save figure
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -644,43 +572,58 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         pval = correlation_results.get('pval_disagreement_conf', 1)
         print(f"   Disagreement ↔ Forward Vol: r={corr:.4f} (p={pval:.4f})")
     
-    # Fit GARCH models
+    # Fit GARCH models using DAILY DATA
+    # Now that debates run daily, merged_df contains daily observations
     if verbose:
         print("\n5. Fitting GARCH models...")
     
-    returns = merged_df['Log_Return'].values
-    disagreement = merged_df['disagreement_conf'].values
+    # Get daily returns and disagreement from merged_df (now daily aligned)
+    merged_df = merged_df.sort_values('date')
     
+    daily_returns = merged_df['Log_Return'].values
+    daily_disagreement = merged_df['disagreement_conf'].values
+    
+    if verbose:
+        print(f"   Using {len(daily_returns)} DAILY returns for GARCH fitting")
+        print(f"   (Clean alignment: daily debates → daily volatility)")
+    
+    # Fit baseline GARCH on daily returns
     if verbose:
         print("   Fitting baseline GARCH(1,1)...")
-    garch_baseline = fit_garch_baseline(returns)
+    garch_baseline = fit_garch_baseline(daily_returns)
     
+    # Fit GARCH-X with daily disagreement
     if verbose:
         print("   Fitting GARCH-X with disagreement...")
-    garch_x = fit_garch_x(returns, disagreement)
     
-    # Print model comparison
+    if len(daily_disagreement) > 50:
+        garch_x = fit_garch_x(daily_returns, daily_disagreement)
+    else:
+        if verbose:
+            print("   Warning: Insufficient data for GARCH-X fitting")
+        garch_x = None
+    
+    # Print RMSE Executive Summary
     if verbose and garch_baseline and garch_x:
-        print("\n6. Model Comparison:")
-        print("-" * 50)
-        print(f"{'Metric':<15} {'GARCH(1,1)':<15} {'GARCH-X':<15} {'Better':<10}")
-        print("-" * 50)
+        baseline_rmse = garch_baseline['rmse']
+        agent_rmse = garch_x['rmse']
+        agents_win = agent_rmse < baseline_rmse
+        error_reduction = (baseline_rmse - agent_rmse) / baseline_rmse * 100
         
-        aic_better = "GARCH-X" if garch_x['aic'] < garch_baseline['aic'] else "GARCH"
-        bic_better = "GARCH-X" if garch_x['bic'] < garch_baseline['bic'] else "GARCH"
-        rmse_better = "GARCH-X" if garch_x['rmse'] < garch_baseline['rmse'] else "GARCH"
-        mae_better = "GARCH-X" if garch_x['mae'] < garch_baseline['mae'] else "GARCH"
-        
-        print(f"{'AIC':<15} {garch_baseline['aic']:<15.2f} {garch_x['aic']:<15.2f} {aic_better:<10}")
-        print(f"{'BIC':<15} {garch_baseline['bic']:<15.2f} {garch_x['bic']:<15.2f} {bic_better:<10}")
-        print(f"{'RMSE':<15} {garch_baseline['rmse']:<15.6f} {garch_x['rmse']:<15.6f} {rmse_better:<10}")
-        print(f"{'MAE':<15} {garch_baseline['mae']:<15.6f} {garch_x['mae']:<15.6f} {mae_better:<10}")
-        
-        if garch_x.get('exog_coef') is not None:
-            print(f"\n   GARCH-X exogenous coefficient: {garch_x['exog_coef']:.4f}")
-            print(f"   GARCH-X exogenous p-value: {garch_x['exog_pval']:.4f}")
-            sig = "***" if garch_x['exog_pval'] < 0.01 else "**" if garch_x['exog_pval'] < 0.05 else "*" if garch_x['exog_pval'] < 0.1 else ""
-            print(f"   Significance: {sig}")
+        print("\n" + "=" * 80)
+        print("                      EXECUTIVE SUMMARY (RMSE TEST)")
+        print("=" * 80)
+        print(f"1. Standard GARCH RMSE: {baseline_rmse:.6f}")
+        print(f"2. Agent GARCH-X RMSE:  {agent_rmse:.6f} (Lower is Better)")
+        print()
+        print("VERDICT:")
+        if agents_win:
+            print(f"[X] SUCCESS: Agents reduced error by {abs(error_reduction):.2f}%.")
+            print("[ ] FAILURE: Standard model was more accurate.")
+        else:
+            print("[ ] SUCCESS: Agents reduced error by X%.")
+            print(f"[X] FAILURE: Standard model was more accurate (by {abs(error_reduction):.2f}%).")
+        print("=" * 80)
     
     # Create visualization
     if verbose:

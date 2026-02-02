@@ -134,17 +134,13 @@ def run_backtest(
             if verbose:
                 print(f"Test mode: processing {len(trading_dates)} days")
         
-        # WEEKLY FILTER: Run debates only on Fridays
-        # Rationale: Daily debates are computationally expensive and noisy.
-        # Financial volatility is "sticky" (autocorrelated). Weekly sampling
-        # captures major trends while running 5x faster.
-        original_count = len(trading_dates)
-        trading_dates = [d for d in trading_dates if d.weekday() == 4]  # 4 = Friday
-        if verbose and original_count > 0:
-            print(f"Weekly Mode: {len(trading_dates)} Fridays (filtered from {original_count} days)")
+        # DAILY MODE: Run debates every trading day for maximum granularity
+        # Note: This requires ~5x more API calls than weekly mode
+        # To switch back to weekly, uncomment the Friday filter below:
+        # trading_dates = [d for d in trading_dates if d.weekday() == 4]  # Friday only
         
         if verbose:
-            print(f"Processing {len(trading_dates)} trading days")
+            print(f"Daily Mode: Processing {len(trading_dates)} trading days")
         
         # Initialize debate room for this ticker
         room = DebateRoom(num_rounds=num_rounds, ticker=ticker)

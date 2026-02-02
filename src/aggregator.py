@@ -92,48 +92,77 @@ class Aggregator:
         
         return result
     
-    def format_group_summary(
+    def format_opposing_argument(
         self,
-        statistics: Dict[str, float],
-        agent_outputs: Optional[List[Dict[str, Any]]] = None
+        current_agent_output: Dict[str, Any],
+        all_outputs: List[Dict[str, Any]]
     ) -> str:
         """
-        Format group belief summary for agents.
+        Format the OPPOSING argument for the current agent (Blind & Battle Protocol).
+        
+        Instead of showing the mean (which causes herding), we show the agent
+        the most opposing viewpoint and ask them to critique it specifically.
         
         Args:
-            statistics: Output from compute_statistics()
-            agent_outputs: Optional list of agent outputs for detailed summary
+            current_agent_output: The current agent's Round 1 output
+            all_outputs: All agents' Round 1 outputs
             
         Returns:
-            Formatted string for agent context
+            Formatted critique prompt with the opposing argument
         """
-        summary = f"""
-GROUP BELIEF SUMMARY:
-- Mean Score: {statistics['mean_score']:.3f}
-- Variance (Disagreement): {statistics['variance']:.4f}
-- Average Confidence: {statistics['avg_confidence']:.3f}
-- Number of Agents: {statistics['num_agents']}
-"""
+        current_score = current_agent_output.get('score', 0.0)
+        current_name = current_agent_output.get('agent_name', 'You')
         
-        if agent_outputs:
-            summary += "\nOTHER AGENTS' POSITIONS:\n"
-            for output in agent_outputs:
-                agent_name = output.get('agent_name', 'Unknown')
-                score = output.get('score', 0.0)
-                confidence = output.get('confidence', 0.5)
-                reasoning = output.get('reasoning', 'No reasoning provided')
-                
-                # Truncate reasoning if too long
-                if len(reasoning) > 300:
-                    reasoning = reasoning[:300] + "..."
-                
-                summary += f"""
---- {agent_name} ---
-Score: {score:.3f} (Confidence: {confidence:.3f})
-Reasoning: {reasoning}
-"""
+        # Find the most opposing agent (maximum score difference)
+        max_diff = -1
+        opponent = None
         
-        return summary
+        for output in all_outputs:
+            opponent_name = output.get('agent_name', 'Unknown')
+            if opponent_name == current_name:
+                continue
+            
+            opponent_score = output.get('score', 0.0)
+            diff = abs(current_score - opponent_score)
+            
+            if diff > max_diff:
+                max_diff = diff
+                opponent = output
+        
+        if opponent is None:
+            return ""
+        
+        opponent_name = opponent.get('agent_name', 'Unknown')
+        opponent_score = opponent.get('score', 0.0)
+        opponent_reasoning = opponent.get('reasoning', 'No reasoning provided')
+        
+        # Determine if we're Bull vs Bear
+        current_direction = "BULLISH" if current_score > 0 else "BEARISH" if current_score < 0 else "NEUTRAL"
+        opponent_direction = "BULLISH" if opponent_score > 0 else "BEARISH" if opponent_score < 0 else "NEUTRAL"
+        
+        return f"""
+================================================================================
+                          🔥 CRITIQUE ROUND - BATTLE MODE 🔥
+================================================================================
+
+YOUR POSITION: {current_direction} (Score: {current_score:.3f})
+
+OPPOSING ARGUMENT FROM {opponent_name.upper()} ({opponent_direction}):
+Score: {opponent_score:.3f}
+Reasoning: "{opponent_reasoning}"
+
+================================================================================
+                          YOUR MISSION (CRITIQUE PROTOCOL)
+================================================================================
+
+1. Point out the SPECIFIC FLAW in {opponent_name}'s logic.
+2. Explain WHY your data/analysis is more relevant TODAY.
+3. DO NOT agree just for harmony. If they are wrong, say so.
+4. Update your score ONLY if their logic is undeniably correct.
+
+RESPOND WITH YOUR UPDATED ASSESSMENT:
+{{"score": <your score>, "confidence": <your confidence>, "reasoning": "<your critique of their argument + your defense>"}}
+"""
     
     def get_disagreement_signal(
         self,
@@ -158,12 +187,12 @@ Reasoning: {reasoning}
         }
         
         # Add individual agent scores and confidences
-        agent_names = ["fundamental", "sentiment", "technical", "macro"]
-        for i, output in enumerate(agent_outputs):
-            if i < len(agent_names):
-                name = agent_names[i]
-                result[f"score_{name}"] = output.get("score", 0.0)
-                result[f"confidence_{name}"] = output.get("confidence", 0.5)
+        # Use agent_name from output, not position index (handles missing agents)
+        for output in agent_outputs:
+            agent_name = output.get("agent_name", "").lower()
+            if agent_name:
+                result[f"score_{agent_name}"] = output.get("score", 0.0)
+                result[f"confidence_{agent_name}"] = output.get("confidence", 0.5)
         
         return result
     
