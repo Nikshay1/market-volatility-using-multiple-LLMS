@@ -379,6 +379,11 @@ def create_visualization(
     """
     Create comprehensive visualization of analysis results.
     
+    Layout:
+    - Top Left: "Slope of Truth" - Scatter with trendline
+    - Top Right: "Crystal Ball" - Time series with echo effect
+    - Bottom: "Pulse Check" - Agent score distributions
+    
     Args:
         df: Merged DataFrame
         correlation_results: Correlation analysis results
@@ -389,143 +394,196 @@ def create_visualization(
     save_path = save_path or config.RESULTS_PLOT_PATH
     
     # Set style
-    plt.style.use('seaborn-v0_8-whitegrid')
-    sns.set_palette("husl")
+    plt.style.use('seaborn-v0_8-darkgrid')
     
-    fig, axes = plt.subplots(3, 2, figsize=(14, 12))
-    fig.suptitle('Agentic Dissonance v2 - Analysis Results', fontsize=14, fontweight='bold')
+    fig = plt.figure(figsize=(16, 14))
+    fig.suptitle('Agentic Dissonance v2 - Experiment Results', fontsize=16, fontweight='bold', y=0.98)
     
-    # 1. Disagreement vs Forward Volatility scatter
-    ax1 = axes[0, 0]
+    # Create grid: 2 rows, top row has 2 plots, bottom row has 3 plots
+    gs = fig.add_gridspec(3, 3, height_ratios=[1.2, 1.2, 1], hspace=0.35, wspace=0.3)
+    
+    # ================================================================
+    # 1. TOP LEFT: "Slope of Truth" - Scatter with Trendline
+    # ================================================================
+    ax1 = fig.add_subplot(gs[0, 0:2])
     if 'disagreement_conf' in df.columns and 'Forward_Volatility' in df.columns:
         valid = df[['disagreement_conf', 'Forward_Volatility']].dropna()
-        ax1.scatter(valid['disagreement_conf'], valid['Forward_Volatility'], 
-                   alpha=0.6, c='steelblue', s=30)
         
-        # Add trend line
+        # Scatter plot
+        ax1.scatter(valid['disagreement_conf'], valid['Forward_Volatility'], 
+                   alpha=0.6, c='steelblue', s=50, edgecolors='white', linewidth=0.5)
+        
+        # Add RED trend line (the "Slope of Truth")
         if len(valid) > 2:
             z = np.polyfit(valid['disagreement_conf'], valid['Forward_Volatility'], 1)
             p = np.poly1d(z)
             x_line = np.linspace(valid['disagreement_conf'].min(), valid['disagreement_conf'].max(), 100)
-            ax1.plot(x_line, p(x_line), 'r--', alpha=0.8, label='Trend')
+            ax1.plot(x_line, p(x_line), 'r-', linewidth=3, alpha=0.9, label=f'Trend (slope={z[0]:.3f})')
+            
+            # Add slope annotation
+            slope_direction = "UPWARD ↗" if z[0] > 0 else "DOWNWARD ↘" if z[0] < 0 else "FLAT →"
+            ax1.annotate(f'Slope: {slope_direction}', xy=(0.02, 0.95), xycoords='axes fraction',
+                        fontsize=12, fontweight='bold', 
+                        color='green' if z[0] > 0 else 'red')
         
         corr = correlation_results.get('corr_disagreement_conf', 0)
-        ax1.set_xlabel('Disagreement (D_conf)')
-        ax1.set_ylabel('5-Day Forward Volatility')
-        ax1.set_title(f'Disagreement vs Future Volatility (r={corr:.3f})')
-        ax1.legend()
+        pval = correlation_results.get('pval_disagreement_conf', 1)
+        sig = "***" if pval < 0.01 else "**" if pval < 0.05 else "*" if pval < 0.1 else ""
+        
+        ax1.set_xlabel('Agent Disagreement (D_conf)', fontsize=11)
+        ax1.set_ylabel('5-Day Forward Volatility', fontsize=11)
+        ax1.set_title(f'"Slope of Truth": Disagreement vs Future Volatility (r={corr:.3f}{sig})', 
+                     fontsize=13, fontweight='bold')
+        ax1.legend(loc='lower right')
+        ax1.grid(True, alpha=0.3)
     
-    # 2. Time series of disagreement and volatility
-    ax2 = axes[0, 1]
+    # ================================================================
+    # 2. TOP RIGHT: Model Performance Summary
+    # ================================================================
+    ax_summary = fig.add_subplot(gs[0, 2])
+    ax_summary.axis('off')
+    
+    if garch_baseline and garch_x:
+        aic_diff = garch_baseline['aic'] - garch_x['aic']
+        rmse_imp = (garch_baseline['rmse'] - garch_x['rmse']) / garch_baseline['rmse'] * 100
+        p_val = garch_x.get('exog_pval', 1.0) or 1.0
+        
+        verdict = "PASSED ✓" if aic_diff > 0 and p_val < 0.05 else "MIXED ~" if aic_diff > 0 else "FAILED ✗"
+        verdict_color = 'green' if "PASSED" in verdict else 'orange' if "MIXED" in verdict else 'red'
+        
+        summary_text = f"""
+EXPERIMENT VERDICT
+━━━━━━━━━━━━━━━━━━
+
+Result: {verdict}
+
+KEY METRICS:
+• AIC Improvement: {aic_diff:+.1f}
+• RMSE Reduction: {rmse_imp:+.2f}%
+• Signal P-Value: {p_val:.4f}
+
+INTERPRETATION:
+{"Agents ADD predictive value!" if aic_diff > 0 else "Baseline model is better."}
+{"Signal is statistically significant." if p_val < 0.05 else "Signal may be noise."}
+"""
+        ax_summary.text(0.1, 0.95, summary_text, transform=ax_summary.transAxes, 
+                       fontsize=11, verticalalignment='top', fontfamily='monospace',
+                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    # ================================================================
+    # 3. MIDDLE: "Crystal Ball" - Time Series with Echo Effect
+    # ================================================================
+    ax2 = fig.add_subplot(gs[1, :])
     if 'date' in df.columns:
-        df_sorted = df.sort_values('date')
-        ax2_twin = ax2.twinx()
+        df_sorted = df.sort_values('date').copy()
         
-        ax2.plot(df_sorted['date'], df_sorted['disagreement_conf'], 
-                color='steelblue', label='Disagreement', alpha=0.8)
-        ax2_twin.plot(df_sorted['date'], df_sorted['Forward_Volatility'], 
-                     color='coral', label='Fwd Vol', alpha=0.8)
+        # Normalize both series to 0-1 for overlay
+        d_conf = df_sorted['disagreement_conf']
+        fwd_vol = df_sorted['Forward_Volatility']
         
-        ax2.set_xlabel('Date')
-        ax2.set_ylabel('Disagreement', color='steelblue')
-        ax2_twin.set_ylabel('Forward Volatility', color='coral')
-        ax2.set_title('Time Series: Disagreement & Volatility')
+        d_conf_norm = (d_conf - d_conf.min()) / (d_conf.max() - d_conf.min() + 1e-8)
+        fwd_vol_norm = (fwd_vol - fwd_vol.min()) / (fwd_vol.max() - fwd_vol.min() + 1e-8)
+        
+        # Plot both on same axis (normalized)
+        ax2.plot(df_sorted['date'], d_conf_norm, 
+                color='steelblue', label='Agent Disagreement (D_conf)', 
+                linewidth=2, alpha=0.9)
+        ax2.plot(df_sorted['date'], fwd_vol_norm, 
+                color='coral', label='Future Volatility (5-day ahead)', 
+                linewidth=2, alpha=0.9)
+        
+        # Fill between to show spikes
+        ax2.fill_between(df_sorted['date'], 0, d_conf_norm, alpha=0.2, color='steelblue')
+        ax2.fill_between(df_sorted['date'], 0, fwd_vol_norm, alpha=0.2, color='coral')
+        
+        ax2.set_xlabel('Date', fontsize=11)
+        ax2.set_ylabel('Normalized Magnitude (0-1)', fontsize=11)
+        ax2.set_title('"Crystal Ball": Time Series - Disagreement vs Volatility (Look for Echo Effect: Blue leads Orange)', 
+                     fontsize=13, fontweight='bold')
+        ax2.legend(loc='upper right', fontsize=10)
         ax2.tick_params(axis='x', rotation=45)
+        ax2.set_ylim(-0.05, 1.05)
+        ax2.grid(True, alpha=0.3)
     
-    # 3. Model comparison - AIC/BIC
-    ax3 = axes[1, 0]
-    if garch_baseline and garch_x:
-        models = ['GARCH(1,1)', 'GARCH-X']
-        aic_values = [garch_baseline['aic'], garch_x['aic']]
-        bic_values = [garch_baseline['bic'], garch_x['bic']]
-        
-        x = np.arange(len(models))
-        width = 0.35
-        
-        bars1 = ax3.bar(x - width/2, aic_values, width, label='AIC', color='steelblue')
-        bars2 = ax3.bar(x + width/2, bic_values, width, label='BIC', color='coral')
-        
-        ax3.set_ylabel('Information Criterion')
-        ax3.set_title('Model Comparison: AIC & BIC (lower is better)')
-        ax3.set_xticks(x)
-        ax3.set_xticklabels(models)
-        ax3.legend()
-        
-        # Add value labels
-        for bar in bars1 + bars2:
-            height = bar.get_height()
-            ax3.annotate(f'{height:.1f}',
-                        xy=(bar.get_x() + bar.get_width() / 2, height),
-                        xytext=(0, 3), textcoords="offset points",
-                        ha='center', va='bottom', fontsize=8)
-    
-    # 4. Model comparison - RMSE/MAE
-    ax4 = axes[1, 1]
-    if garch_baseline and garch_x:
-        models = ['GARCH(1,1)', 'GARCH-X']
-        rmse_values = [garch_baseline['rmse'], garch_x['rmse']]
-        mae_values = [garch_baseline['mae'], garch_x['mae']]
-        
-        x = np.arange(len(models))
-        width = 0.35
-        
-        bars1 = ax4.bar(x - width/2, rmse_values, width, label='RMSE', color='forestgreen')
-        bars2 = ax4.bar(x + width/2, mae_values, width, label='MAE', color='goldenrod')
-        
-        ax4.set_ylabel('Error')
-        ax4.set_title('Model Comparison: RMSE & MAE (lower is better)')
-        ax4.set_xticks(x)
-        ax4.set_xticklabels(models)
-        ax4.legend()
-        
-        for bar in bars1 + bars2:
-            height = bar.get_height()
-            ax4.annotate(f'{height:.4f}',
-                        xy=(bar.get_x() + bar.get_width() / 2, height),
-                        xytext=(0, 3), textcoords="offset points",
-                        ha='center', va='bottom', fontsize=8)
-    
-    # 5. Agent scores distribution
-    ax5 = axes[2, 0]
-    score_cols = ['score_fundamental', 'score_sentiment', 'score_technical', 'score_macro']
+    # ================================================================
+    # 4. BOTTOM LEFT: Agent Score Distribution (Pulse Check)
+    # ================================================================
+    ax5 = fig.add_subplot(gs[2, 0])
+    score_cols = ['score_sentiment', 'score_technical', 'score_macro']
     available_cols = [c for c in score_cols if c in df.columns]
     if available_cols:
         data_to_plot = [df[col].dropna() for col in available_cols]
         labels = [col.replace('score_', '').capitalize() for col in available_cols]
         
-        bp = ax5.boxplot(data_to_plot, labels=labels, patch_artist=True)
-        colors = ['steelblue', 'coral', 'forestgreen', 'goldenrod']
+        bp = ax5.boxplot(data_to_plot, labels=labels, patch_artist=True, widths=0.6)
+        colors = ['coral', 'forestgreen', 'goldenrod']
         for patch, color in zip(bp['boxes'], colors[:len(bp['boxes'])]):
             patch.set_facecolor(color)
             patch.set_alpha(0.7)
         
-        ax5.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
-        ax5.set_ylabel('Score')
-        ax5.set_title('Agent Score Distributions')
+        ax5.axhline(y=0, color='gray', linestyle='--', alpha=0.7, linewidth=2)
+        ax5.axhline(y=-1, color='red', linestyle=':', alpha=0.3)
+        ax5.axhline(y=1, color='green', linestyle=':', alpha=0.3)
+        ax5.set_ylabel('Score (-1 to +1)')
+        ax5.set_title('"Pulse Check": Agent Score Distributions', fontsize=11, fontweight='bold')
+        ax5.set_ylim(-1.2, 1.2)
+        ax5.grid(True, alpha=0.3)
     
-    # 6. Confidence distribution
-    ax6 = axes[2, 1]
-    conf_cols = ['confidence_fundamental', 'confidence_sentiment', 
-                 'confidence_technical', 'confidence_macro']
+    # ================================================================
+    # 5. BOTTOM CENTER: Agent Confidence Distribution
+    # ================================================================
+    ax6 = fig.add_subplot(gs[2, 1])
+    conf_cols = ['confidence_sentiment', 'confidence_technical', 'confidence_macro']
     available_conf = [c for c in conf_cols if c in df.columns]
     if available_conf:
         data_to_plot = [df[col].dropna() for col in available_conf]
         labels = [col.replace('confidence_', '').capitalize() for col in available_conf]
         
-        bp = ax6.boxplot(data_to_plot, labels=labels, patch_artist=True)
-        colors = ['steelblue', 'coral', 'forestgreen', 'goldenrod']
+        bp = ax6.boxplot(data_to_plot, labels=labels, patch_artist=True, widths=0.6)
+        colors = ['coral', 'forestgreen', 'goldenrod']
         for patch, color in zip(bp['boxes'], colors[:len(bp['boxes'])]):
             patch.set_facecolor(color)
             patch.set_alpha(0.7)
         
-        ax6.set_ylabel('Confidence')
-        ax6.set_title('Agent Confidence Distributions')
+        ax6.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7, linewidth=2)
+        ax6.set_ylabel('Confidence (0 to 1)')
+        ax6.set_title('Agent Confidence Levels', fontsize=11, fontweight='bold')
+        ax6.set_ylim(-0.1, 1.1)
+        ax6.grid(True, alpha=0.3)
     
-    plt.tight_layout()
+    # ================================================================
+    # 6. BOTTOM RIGHT: Model Comparison AIC/BIC
+    # ================================================================
+    ax3 = fig.add_subplot(gs[2, 2])
+    if garch_baseline and garch_x:
+        models = ['GARCH(1,1)\n(Baseline)', 'GARCH-X\n(+Disagreement)']
+        aic_values = [garch_baseline['aic'], garch_x['aic']]
+        
+        x = np.arange(len(models))
+        bars = ax3.bar(x, aic_values, color=['gray', 'steelblue'], width=0.5, edgecolor='black')
+        
+        # Highlight winner
+        winner_idx = 0 if aic_values[0] < aic_values[1] else 1
+        bars[winner_idx].set_color('green')
+        bars[winner_idx].set_alpha(0.8)
+        
+        ax3.set_ylabel('AIC (lower is better)')
+        ax3.set_title('Model Comparison', fontsize=11, fontweight='bold')
+        ax3.set_xticks(x)
+        ax3.set_xticklabels(models)
+        
+        # Add value labels
+        for bar in bars:
+            height = bar.get_height()
+            ax3.annotate(f'{height:.1f}',
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3), textcoords="offset points",
+                        ha='center', va='bottom', fontsize=9, fontweight='bold')
+        ax3.grid(True, alpha=0.3, axis='y')
     
     # Save figure
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
     print(f"Visualization saved to {save_path}")
     
     plt.close()

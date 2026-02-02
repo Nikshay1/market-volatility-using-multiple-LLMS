@@ -70,13 +70,13 @@ FRED_SERIES = {
 # ============================================================
 
 # Multi-asset support
-# CHANGE: Switch to AAPL (Apple) for analysis
-TICKER_LIST: List[str] = ["AAPL"]
-DEFAULT_TICKER: str = "AAPL"  # Default for single-ticker operations
+# CHANGE: Switch to NVDA (NVIDIA) for analysis
+TICKER_LIST: List[str] = ["NVDA"]
+DEFAULT_TICKER: str = "NVDA"  # Default for single-ticker operations
 
 # Date range for analysis
 # Covers "Funding Secured", Model 3 Ramp, COVID Crash
-START_DATE: str = "2019-07-01"
+START_DATE: str = "2017-06-01"
 END_DATE: str = "2020-06-10"
 
 

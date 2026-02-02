@@ -93,3 +93,5 @@ logs/
 *.tmp
 *.temp
 .tmp/
+
+analyst_ratings_processed.csv

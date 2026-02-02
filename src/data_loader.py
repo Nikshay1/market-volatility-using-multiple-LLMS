@@ -233,16 +233,16 @@ def fetch_news(
     (data/historical_news.csv) and filters for headlines that appeared on or
     before the backtest date.
     
-    This guarantees the agent sees "Elon tweets about taking Tesla private" on
-    Aug 7, 2018, not today's news.
+    WEEKLY MODE: Since backtest runs on Fridays, we look back 7 days to capture
+    the entire week's news (Monday through Friday).
     
     Args:
         ticker: Stock ticker symbol
-        date: The reference date (news must be <= this date)
+        date: The reference date (Friday - news must be <= this date)
         use_gnews: Ignored - kept for compatibility
         
     Returns:
-        List of headline strings (up to 5 headlines from last 3 days)
+        List of headline strings (up to 50 headlines from last 7 days)
     """
     csv_path = os.path.join(config.DATA_DIR, "historical_news.csv")
     
@@ -258,12 +258,13 @@ def fetch_news(
         
         target_date = pd.to_datetime(date).date()
         
-        # Get news from the last 3 days (on or before target date)
+        # Get news from the last 7 DAYS (full week: Mon-Fri for Friday backtest)
         mask = (df['Ticker'] == ticker) & \
                (df['Date'].dt.date <= target_date) & \
-               (df['Date'].dt.date >= target_date - timedelta(days=3))
+               (df['Date'].dt.date >= target_date - timedelta(days=7))
         
-        headlines = df[mask].sort_values('Date', ascending=False)['Headline'].head(5).tolist()
+        # Get up to 50 headlines from the full week (5 days × ~10/day)
+        headlines = df[mask].sort_values('Date', ascending=False)['Headline'].head(50).tolist()
         
         if headlines:
             return headlines

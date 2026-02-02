@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 INPUT_FILE = "analyst_ratings_processed.csv"  # User must download this from Kaggle
 OUTPUT_FILE = os.path.join("data", "historical_news.csv")
-TARGET_TICKER = "AAPL"
+TARGET_TICKER = "NVDA"
 
 
 def convert_dataset():
