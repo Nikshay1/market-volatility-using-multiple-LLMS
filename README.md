@@ -68,7 +68,7 @@ The framework tests this hypothesis by:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                          AGENTIC DISSONANCE v2                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
+│                                                                             │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
 │  │    DATA      │    │   INFOBOTS   │    │   MARKET     │                   │
 │  │    LOADER    │    │              │    │    DATA      │                   │
@@ -76,16 +76,16 @@ The framework tests this hypothesis by:
 │  │ • yfinance   │────│ • VIX/TNX    │────│ • OHLCV      │                   │
 │  │ • News RSS   │    │ • Oil/DXY    │    │ • Returns    │                   │
 │  └──────────────┘    └──────────────┘    └──────────────┘                   │
-│          │                  │                   │                            │
-│          └──────────────────┴───────────────────┘                            │
-│                             │                                                │
-│                    ┌────────▼────────┐                                       │
-│                    │  CONTEXT STRING │                                       │
-│                    │   (formatted)   │                                       │
-│                    └────────┬────────┘                                       │
-│                             │                                                │
-│           ┌─────────────────┼─────────────────┐                              │
-│           ▼                 ▼                 ▼                              │
+│          │                  │                   │                           │
+│          └──────────────────┴───────────────────┘                           │
+│                             │                                               │
+│                    ┌────────▼────────┐                                      │
+│                    │  CONTEXT STRING │                                      │
+│                    │   (formatted)   │                                      │
+│                    └────────┬────────┘                                      │
+│                             │                                               │
+│           ┌─────────────────┼─────────────────┐                             │
+│           ▼                 ▼                 ▼                             │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                       │
 │  │  SENTIMENT   │  │  TECHNICAL   │  │    MACRO     │                       │
 │  │    AGENT     │  │    AGENT     │  │    AGENT     │                       │
@@ -94,32 +94,32 @@ The framework tests this hypothesis by:
 │  │ • Headlines  │  │ • Momentum   │  │ • Rates      │                       │
 │  │ • Fear/Greed │  │ • Trends     │  │ • Risk-On/Off│                       │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                       │
-│         │                 │                 │                                │
-│         ▼                 ▼                 ▼                                │
+│         │                 │                 │                               │
+│         ▼                 ▼                 ▼                               │
 │  ┌──────────────────────────────────────────────────────┐                   │
 │  │              DEBATE ENGINE (Blind & Battle)          │                   │
-│  │                                                       │                   │
+│  │                                                       │                  │
 │  │  Round 1: BLIND VOTE (agents analyze in isolation)   │                   │
 │  │  Round 2: BATTLE (agents critique opposing views)    │                   │
 │  └───────────────────────────┬──────────────────────────┘                   │
-│                              │                                               │
-│                     ┌────────▼────────┐                                      │
-│                     │   AGGREGATOR    │                                      │
-│                     │                 │                                      │
-│                     │ • Mean Score μt │                                      │
-│                     │ • D_conf        │                                      │
-│                     │ • Confidence    │                                      │
-│                     └────────┬────────┘                                      │
-│                              │                                               │
-│                     ┌────────▼────────┐                                      │
-│                     │    ANALYSIS     │                                      │
-│                     │                 │                                      │
-│                     │ • Correlation   │                                      │
-│                     │ • GARCH(1,1)    │                                      │
-│                     │ • GARCH-X       │                                      │
-│                     │ • Visualization │                                      │
-│                     └─────────────────┘                                      │
-│                                                                              │
+│                              │                                              │
+│                     ┌────────▼────────┐                                     │
+│                     │   AGGREGATOR    │                                     │
+│                     │                 │                                     │
+│                     │ • Mean Score μt │                                     │
+│                     │ • D_conf        │                                     │
+│                     │ • Confidence    │                                     │
+│                     └────────┬────────┘                                     │
+│                              │                                              │
+│                     ┌────────▼────────┐                                     │
+│                     │    ANALYSIS     │                                     │
+│                     │                 │                                     │
+│                     │ • Correlation   │                                     │
+│                     │ • GARCH(1,1)    │                                     │
+│                     │ • GARCH-X       │                                     │
+│                     │ • Visualization │                                     │
+│                     └─────────────────┘                                     │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -133,17 +133,17 @@ The **Blind & Battle** protocol is specifically designed to prevent "herding"—
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    BLIND & BATTLE PROTOCOL                       │
+│                    BLIND & BATTLE PROTOCOL                      │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
+│                                                                 │
 │  ╔════════════════════════════════════════════════════════════╗ │
 │  ║ ROUND 1: BLIND VOTE                                        ║ │
 │  ╠════════════════════════════════════════════════════════════╣ │
 │  ║                                                            ║ │
 │  ║  Each agent receives:                                      ║ │
-│  ║  • Market data (OHLCV, returns)                           ║ │
-│  ║  • News headlines (last 24 hours)                         ║ │
-│  ║  • Macro indicators (VIX, yields, oil)                    ║ │
+│  ║  • Market data (OHLCV, returns)                            ║ │
+│  ║  • News headlines (last 24 hours)                          ║ │
+│  ║  • Macro indicators (VIX, yields, oil)                     ║ │
 │  ║                                                            ║ │
 │  ║  Each agent DOES NOT receive:                              ║ │
 │  ║  • Other agents' scores                                    ║ │
@@ -151,7 +151,7 @@ The **Blind & Battle** protocol is specifically designed to prevent "herding"—
 │  ║                                                            ║ │
 │  ║  OUTPUT: Initial independent beliefs                       ║ │
 │  ╚════════════════════════════════════════════════════════════╝ │
-│                          ↓                                       │
+│                          ↓                                      │
 │  ╔════════════════════════════════════════════════════════════╗ │
 │  ║ ROUND 2: BATTLE MODE                                       ║ │
 │  ╠════════════════════════════════════════════════════════════╣ │
@@ -170,7 +170,7 @@ The **Blind & Battle** protocol is specifically designed to prevent "herding"—
 │  ║                                                            ║ │
 │  ║  OUTPUT: Final refined beliefs (with disagreement signal)  ║ │
 │  ╚════════════════════════════════════════════════════════════╝ │
-│                                                                  │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -305,49 +305,49 @@ TASK: Analyze the DAILY % CHANGE in the following proxies:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        DATA PIPELINE                             │
+│                        DATA PIPELINE                            │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  EXTERNAL APIs                                                   │
+│                                                                 │
+│  EXTERNAL APIs                                                  │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │ yfinance                                                  │   │
+│  │ yfinance                                                 │   │
 │  │ • Market OHLCV data (NVDA, etc.)                         │   │
 │  │ • VIX, Treasury yields, Oil, Dollar Index                │   │
 │  │ • Historical prices with no look-ahead bias              │   │
 │  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
+│                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │ News RSS Feeds                                            │   │
+│  │ News RSS Feeds                                           │   │
 │  │ • Google News RSS: "/rss/search?q={ticker}"              │   │
-│  │ • Yahoo Finance RSS                                       │   │
+│  │ • Yahoo Finance RSS                                      │   │
 │  │ • Fallback: Pre-formatted headlines from local CSV       │   │
 │  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
+│                                                                 │
 │  INFOBOTS (Data Injection Agents)                               │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │ MacroInfobot                                              │   │
+│  │ MacroInfobot                                             │   │
 │  │ • Fetches VIX, TNX, Oil, Dollar from yfinance            │   │
 │  │ • Formats as context string for agents                   │   │
 │  │ • Caches results to avoid redundant API calls            │   │
-│  │                                                           │   │
-│  │ Output format:                                            │   │
-│  │ MACRO DATA:                                               │   │
+│  │                                                          │   │
+│  │ Output format:                                           │   │
+│  │ MACRO DATA:                                              │   │
 │  │ - VIX (Fear Index): 18.45                                │   │
 │  │ - 10Y Yield: 4.25%                                       │   │
 │  │ - Oil: $75.30                                            │   │
 │  │ - DXY (Dollar): 102.50                                   │   │
 │  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
+│                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │ FundamentalInfobot (DISABLED)                             │   │
-│  │                                                           │   │
-│  │ ⚠️ Disabled to prevent look-ahead bias!                   │   │
-│  │                                                           │   │
+│  │ FundamentalInfobot (DISABLED)                            │   │
+│  │                                                          │   │
+│  │ ⚠️⚠️ Disabled to prevent look-ahead bias!               │   │
+│  │                                                          │   │
 │  │ Using yfinance.info to fetch current P/E ratios for      │   │
 │  │ historical dates would use 2024 data to predict 2019     │   │
 │  │ volatility, which invalidates the experiment.            │   │
 │  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
