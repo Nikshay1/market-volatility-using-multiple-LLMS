@@ -106,7 +106,7 @@ def calculate_forward_volatility(
             group['Forward_Volatility'] = fwd_vol
             return group
         
-        df = df.groupby('Ticker', group_keys=False).apply(calc_fwd_vol)
+        df = df.groupby('Ticker', group_keys=False).apply(calc_fwd_vol, include_groups=False)
     else:
         # Single ticker
         returns = df['Log_Return'].values
@@ -425,7 +425,7 @@ def create_visualization(
         
         ax1.set_xlabel('Date', fontsize=11)
         ax1.set_ylabel('Normalized Magnitude (0-1)', fontsize=11)
-        ax1.set_title('📈 TIME SERIES: Agent Disagreement vs Next Day Volatility\n(Goal: Blue spikes BEFORE Orange)', 
+        ax1.set_title('TIME SERIES: Agent Disagreement vs Next Day Volatility\n(Goal: Blue spikes BEFORE Orange)', 
                      fontsize=13, fontweight='bold')
         ax1.legend(loc='upper right', fontsize=10)
         ax1.tick_params(axis='x', rotation=45)
@@ -452,7 +452,7 @@ def create_visualization(
             
             # Add slope annotation with verdict
             slope_positive = z[0] > 0
-            verdict_text = "✅ POSITIVE SLOPE" if slope_positive else "❌ NEGATIVE SLOPE"
+            verdict_text = "[+] POSITIVE SLOPE" if slope_positive else "[-] NEGATIVE SLOPE"
             verdict_color = 'green' if slope_positive else 'red'
             ax2.annotate(verdict_text, xy=(0.02, 0.95), xycoords='axes fraction',
                         fontsize=12, fontweight='bold', color=verdict_color)
@@ -461,7 +461,7 @@ def create_visualization(
         
         ax2.set_xlabel('Agent Disagreement', fontsize=11)
         ax2.set_ylabel('Next Day Volatility', fontsize=11)
-        ax2.set_title(f'📊 SCATTER: Disagreement → Volatility (r={corr:.3f})\n(Goal: Positive Slope)', 
+        ax2.set_title(f'SCATTER: Disagreement vs Volatility (r={corr:.3f})\n(Goal: Positive Slope)', 
                      fontsize=12, fontweight='bold')
         ax2.legend(loc='lower right')
         ax2.grid(True, alpha=0.3)
@@ -476,7 +476,7 @@ def create_visualization(
         data_to_plot = [df[col].dropna() for col in available_cols]
         labels = [col.replace('score_', '').capitalize() for col in available_cols]
         
-        bp = ax3.boxplot(data_to_plot, labels=labels, patch_artist=True, widths=0.6)
+        bp = ax3.boxplot(data_to_plot, tick_labels=labels, patch_artist=True, widths=0.6)
         colors = ['coral', 'forestgreen', 'goldenrod']
         for patch, color in zip(bp['boxes'], colors[:len(bp['boxes'])]):
             patch.set_facecolor(color)
@@ -494,17 +494,17 @@ def create_visualization(
                 flatline_check.append(labels[i])
         
         if flatline_check:
-            verdict_text = f"⚠️ FLATLINE: {', '.join(flatline_check)}"
+            verdict_text = f"[!] FLATLINE: {', '.join(flatline_check)}"
             verdict_color = 'red'
         else:
-            verdict_text = "✅ ALL AGENTS ACTIVE"
+            verdict_text = "[OK] ALL AGENTS ACTIVE"
             verdict_color = 'green'
         
         ax3.annotate(verdict_text, xy=(0.02, 0.95), xycoords='axes fraction',
                     fontsize=11, fontweight='bold', color=verdict_color)
         
         ax3.set_ylabel('Score (-1 to +1)')
-        ax3.set_title('� BOXPLOTS: Agent Score Distributions\n(Goal: Not flatlining at 0.0)', 
+        ax3.set_title('BOXPLOTS: Agent Score Distributions\n(Goal: Not flatlining at 0.0)', 
                      fontsize=12, fontweight='bold')
         ax3.set_ylim(-1.3, 1.3)
         ax3.grid(True, alpha=0.3)
@@ -513,6 +513,220 @@ def create_visualization(
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
     print(f"Visualization saved to {save_path}")
+    
+    plt.close()
+
+
+def create_disagreement_figure(
+    df: pd.DataFrame,
+    correlation_results: Dict,
+    save_path: str = None
+) -> None:
+    """
+    Create Figure 1: Agent Disagreement vs. Future Volatility (standalone).
+    
+    Args:
+        df: Merged DataFrame with disagreement and volatility data
+        correlation_results: Correlation analysis results
+        save_path: Path to save the figure (default: output/fig1_disagreement.png)
+    """
+    save_path = save_path or os.path.join(config.OUTPUT_DIR, "fig1_disagreement.png")
+    
+    # Set style
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    if 'disagreement_conf' in df.columns and 'Forward_Volatility' in df.columns:
+        valid = df[['disagreement_conf', 'Forward_Volatility']].dropna()
+        
+        # Scatter plot with alpha=0.6 for density
+        ax.scatter(valid['disagreement_conf'], valid['Forward_Volatility'], 
+                  alpha=0.6, c='steelblue', s=50, edgecolors='white', linewidth=0.5)
+        
+        # Add Linear Regression Trendline (Red)
+        slope = 0
+        if len(valid) > 2:
+            z = np.polyfit(valid['disagreement_conf'], valid['Forward_Volatility'], 1)
+            slope = z[0]
+            p = np.poly1d(z)
+            x_line = np.linspace(valid['disagreement_conf'].min(), valid['disagreement_conf'].max(), 100)
+            ax.plot(x_line, p(x_line), 'r-', linewidth=2.5, label='Linear Regression')
+        
+        # Get correlation
+        corr = correlation_results.get('corr_disagreement_conf', 0)
+        
+        # Axis labels
+        ax.set_xlabel('D_conf (Agent Disagreement/Std Dev)', fontsize=12)
+        ax.set_ylabel('Forward_Volatility (Next-Day Realized Volatility)', fontsize=12)
+        ax.set_title('Agent Disagreement vs. Future Volatility', fontsize=14, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        
+        # Annotation: Text box showing correlation coefficient and slope
+        ax.text(0.05, 0.95, f'r = {corr:.2f}\nslope = {slope:.4f}', transform=ax.transAxes, fontsize=14,
+               verticalalignment='top', fontweight='bold',
+               bbox=dict(boxstyle='round', facecolor='white', edgecolor='black', alpha=0.8))
+    
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f"Figure 1 saved to {save_path}")
+    
+    plt.close()
+
+
+def create_mean_score_figure(
+    df: pd.DataFrame,
+    correlation_results: Dict,
+    save_path: str = None
+) -> None:
+    """
+    Create Figure 2: Mean Agent Score vs. Future Volatility (standalone).
+    
+    Args:
+        df: Merged DataFrame with mean_score and volatility data
+        correlation_results: Correlation analysis results
+        save_path: Path to save the figure (default: output/fig2_mean_score.png)
+    """
+    save_path = save_path or os.path.join(config.OUTPUT_DIR, "fig2_mean_score.png")
+    
+    # Set style
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    if 'mean_score' in df.columns and 'Forward_Volatility' in df.columns:
+        valid = df[['mean_score', 'Forward_Volatility']].dropna()
+        
+        # Scatter plot with alpha=0.6 for density
+        ax.scatter(valid['mean_score'], valid['Forward_Volatility'], 
+                  alpha=0.6, c='steelblue', s=50, edgecolors='white', linewidth=0.5)
+        
+        # Add Linear Regression Trendline (Red)
+        if len(valid) > 2:
+            z = np.polyfit(valid['mean_score'], valid['Forward_Volatility'], 1)
+            p = np.poly1d(z)
+            x_line = np.linspace(valid['mean_score'].min(), valid['mean_score'].max(), 100)
+            ax.plot(x_line, p(x_line), 'r-', linewidth=2.5, label='Linear Regression')
+        
+        # Get correlation
+        corr = correlation_results.get('corr_mean_score', 0)
+        pval = correlation_results.get('pval_mean_score', 1)
+        
+        # Format p-value
+        if pval < 0.001:
+            pval_str = "p < 0.001"
+        else:
+            pval_str = f"p = {pval:.3f}"
+        
+        # Axis labels
+        ax.set_xlabel('Mean_Score (Average of Sentiment, Macro, Technical)', fontsize=12)
+        ax.set_ylabel('Forward_Volatility', fontsize=12)
+        ax.set_title('Mean Agent Score vs. Future Volatility', fontsize=14, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        
+        # Invert X-axis so Bearish (-1.0) is on the left
+        ax.invert_xaxis()
+        
+        # Add labels for Bearish/Bullish
+        ax.text(0.02, 0.02, '← Bearish', transform=ax.transAxes, fontsize=10, 
+               verticalalignment='bottom', fontstyle='italic', color='red')
+        ax.text(0.98, 0.02, 'Bullish →', transform=ax.transAxes, fontsize=10, 
+               verticalalignment='bottom', horizontalalignment='right', fontstyle='italic', color='green')
+        
+        # Annotation: Text box showing correlation coefficient and p-value
+        ax.text(0.05, 0.95, f'r = {corr:.3f}\n({pval_str})', transform=ax.transAxes, fontsize=14,
+               verticalalignment='top', fontweight='bold',
+               bbox=dict(boxstyle='round', facecolor='white', edgecolor='black', alpha=0.8))
+    
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f"Figure 2 saved to {save_path}")
+    
+    plt.close()
+
+
+def create_timeline_figure(
+    df: pd.DataFrame,
+    save_path: str = None
+) -> None:
+    """
+    Create Figure 3: 2019 Panic Timeline - Agent Sentiment vs. NVDA Price.
+    
+    Dual-axis chart showing Mean Score bars (red/green) and NVDA Close Price.
+    
+    Args:
+        df: Merged DataFrame with mean_score, Close, and date data
+        save_path: Path to save the figure (default: output/fig3_timeline.png)
+    """
+    save_path = save_path or os.path.join(config.OUTPUT_DIR, "fig3_timeline.png")
+    
+    # Set style
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    fig, ax1 = plt.subplots(figsize=(14, 8))
+    
+    if 'mean_score' in df.columns and 'date' in df.columns:
+        df_sorted = df.sort_values('date').copy()
+        
+        # Ensure date is datetime
+        df_sorted['date'] = pd.to_datetime(df_sorted['date'])
+        
+        # --- Left Y-Axis: Mean Score Bars ---
+        colors = ['red' if score < 0 else 'green' for score in df_sorted['mean_score']]
+        
+        ax1.bar(df_sorted['date'], df_sorted['mean_score'], 
+               color=colors, alpha=0.7, width=1.5)
+        
+        ax1.set_xlabel('Date', fontsize=12)
+        ax1.set_ylabel('Mean_Score (Agent Sentiment)', fontsize=12, color='black')
+        ax1.tick_params(axis='y', labelcolor='black')
+        ax1.axhline(y=0, color='black', linestyle='-', linewidth=1.5, alpha=0.8)
+        
+        # Set y-limits to center the zero line
+        max_abs = max(abs(df_sorted['mean_score'].min()), abs(df_sorted['mean_score'].max())) * 1.2
+        ax1.set_ylim(-max_abs, max_abs)
+        
+        # --- Right Y-Axis: NVDA Close Price ---
+        ax2 = ax1.twinx()
+        
+        if 'Close' in df_sorted.columns:
+            ax2.plot(df_sorted['date'], df_sorted['Close'], 
+                    color='black', linewidth=2, label='NVDA Close Price')
+            ax2.set_ylabel('NVDA Close Price ($)', fontsize=12, color='black')
+            ax2.tick_params(axis='y', labelcolor='black')
+            ax2.legend(loc='upper right', fontsize=10)
+            
+            # Highlight major drops where bar is deep red (score < -0.3)
+            panic_zones = df_sorted[df_sorted['mean_score'] < -0.3]
+            for _, row in panic_zones.iterrows():
+                ax1.axvspan(row['date'] - pd.Timedelta(days=1), 
+                           row['date'] + pd.Timedelta(days=1),
+                           alpha=0.15, color='red', zorder=0)
+        
+        # Title and formatting
+        ax1.set_title('2019 Panic Timeline: Agent Sentiment vs. NVDA Price', 
+                     fontsize=14, fontweight='bold')
+        
+        # Rotate x-axis labels
+        plt.xticks(rotation=45)
+        
+        # Add legend for bar colors
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='green', alpha=0.7, label='Bullish (Score > 0)'),
+            Patch(facecolor='red', alpha=0.7, label='Bearish (Score < 0)'),
+            Patch(facecolor='red', alpha=0.15, label='Panic Zone (Score < -0.3)')
+        ]
+        ax1.legend(handles=legend_elements, loc='upper left', fontsize=9)
+    
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f"Figure 3 saved to {save_path}")
     
     plt.close()
 
@@ -630,6 +844,15 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         print("\n7. Creating visualization...")
     
     create_visualization(merged_df, correlation_results, garch_baseline, garch_x)
+    
+    # Create standalone disagreement figure (fig1_disagreement.png)
+    create_disagreement_figure(merged_df, correlation_results)
+    
+    # Create standalone mean score figure (fig2_mean_score.png)
+    create_mean_score_figure(merged_df, correlation_results)
+    
+    # Create timeline figure (fig3_timeline.png)
+    create_timeline_figure(merged_df)
     
     # Summary statistics
     if verbose:
