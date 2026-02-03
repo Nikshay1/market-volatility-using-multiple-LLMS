@@ -731,6 +731,402 @@ def create_timeline_figure(
     plt.close()
 
 
+def create_mean_score_vs_realized_volatility_timeseries(
+    df: pd.DataFrame,
+    save_path: str = None
+) -> None:
+    """
+    Create Time-Series Plot: Mean Score (μt) vs Realized Volatility (σRV t+1).
+    
+    Dual-axis chart showing:
+    - Left Y-Axis: Mean Score (μt) as a line
+    - Right Y-Axis: Forward/Realized Volatility (σRV t+1) as a line
+    
+    Args:
+        df: Merged DataFrame with mean_score, Forward_Volatility, and date data
+        save_path: Path to save the figure (default: output/mean_score_vs_realized_volatility_timeseries.png)
+    """
+    save_path = save_path or os.path.join(config.OUTPUT_DIR, "mean_score_vs_realized_volatility_timeseries.png")
+    
+    # Set style
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    fig, ax1 = plt.subplots(figsize=(14, 7))
+    
+    if 'mean_score' in df.columns and 'Forward_Volatility' in df.columns and 'date' in df.columns:
+        df_sorted = df.sort_values('date').copy()
+        
+        # Ensure date is datetime
+        df_sorted['date'] = pd.to_datetime(df_sorted['date'])
+        
+        # --- Left Y-Axis: Mean Score (μt) ---
+        color_mean = 'steelblue'
+        ax1.plot(df_sorted['date'], df_sorted['mean_score'], 
+                color=color_mean, linewidth=2, label='μt (Mean Score)', marker='o', markersize=3)
+        ax1.fill_between(df_sorted['date'], 0, df_sorted['mean_score'], alpha=0.2, color=color_mean)
+        
+        ax1.set_xlabel('Date', fontsize=12)
+        ax1.set_ylabel('μt (Mean Score)', fontsize=12, color=color_mean)
+        ax1.tick_params(axis='y', labelcolor=color_mean)
+        ax1.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.7)
+        
+        # --- Right Y-Axis: Realized Volatility (σRV t+1) ---
+        ax2 = ax1.twinx()
+        color_vol = 'darkorange'
+        
+        ax2.plot(df_sorted['date'], df_sorted['Forward_Volatility'], 
+                color=color_vol, linewidth=2, label='σRV t+1 (Realized Volatility)', marker='s', markersize=3)
+        ax2.fill_between(df_sorted['date'], 0, df_sorted['Forward_Volatility'], alpha=0.2, color=color_vol)
+        
+        ax2.set_ylabel('σRV t+1 (Realized Volatility)', fontsize=12, color=color_vol)
+        ax2.tick_params(axis='y', labelcolor=color_vol)
+        
+        # Title
+        ax1.set_title('Time-Series: Mean Score (μt) vs Realized Volatility (σRV t+1)', 
+                     fontsize=14, fontweight='bold')
+        
+        # Rotate x-axis labels
+        plt.xticks(rotation=45)
+        
+        # Combined legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=10)
+        
+        # Calculate and display correlation
+        valid = df_sorted[['mean_score', 'Forward_Volatility']].dropna()
+        if len(valid) > 2:
+            corr = valid['mean_score'].corr(valid['Forward_Volatility'])
+            ax1.text(0.02, 0.98, f'Correlation: r = {corr:.3f}', transform=ax1.transAxes, fontsize=11,
+                    verticalalignment='top', fontweight='bold',
+                    bbox=dict(boxstyle='round', facecolor='white', edgecolor='gray', alpha=0.9))
+    
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f"Mean Score vs Realized Volatility Timeseries saved to {save_path}")
+    
+    plt.close()
+
+
+def create_topology_figure(save_path: str = None) -> None:
+    """
+    Create Debate Topology Diagram: Blind & Battle Protocol / Agent Interaction Graph.
+    
+    Visualizes the 2-round debate protocol:
+    - Round 1 (BLIND VOTE): Agents analyze independently (no interaction)
+    - Round 2 (BATTLE): Each agent critiques opposing views
+    
+    Args:
+        save_path: Path to save the figure (default: output/topology.png)
+    """
+    from matplotlib.patches import FancyBboxPatch, Circle, Rectangle
+    
+    save_path = save_path or os.path.join(config.OUTPUT_DIR, "topology.png")
+    
+    fig, ax = plt.subplots(figsize=(14, 10))
+    ax.set_xlim(0, 14)
+    ax.set_ylim(0, 10)
+    ax.axis('off')
+    
+    # Colors
+    colors = {
+        'sentiment': '#FF6B6B',    # Coral red
+        'technical': '#4ECDC4',    # Teal
+        'macro': '#FFE66D',        # Yellow
+        'fundamental': '#95E1D3',  # Mint green
+        'aggregator': '#A8E6CF',   # Light green
+        'data': '#DDA0DD',         # Plum
+        'round1': '#E8F4FD',       # Light blue
+        'round2': '#FFF3E0',       # Light orange
+    }
+    
+    # Title
+    ax.text(7, 9.5, 'Blind & Battle Protocol: Agent Interaction Topology', 
+            fontsize=16, fontweight='bold', ha='center', va='center')
+    
+    # === ROUND 1: BLIND VOTE (Left side) ===
+    # Background box for Round 1
+    round1_box = Rectangle((0.5, 2), 5.5, 6.5, fill=True, 
+                                 facecolor=colors['round1'], edgecolor='steelblue', 
+                                 linewidth=2, alpha=0.5, zorder=0)
+    ax.add_patch(round1_box)
+    ax.text(3.25, 8.2, 'ROUND 1: BLIND VOTE', fontsize=12, fontweight='bold', 
+            ha='center', color='steelblue')
+    ax.text(3.25, 7.8, '(Independent Analysis)', fontsize=9, ha='center', 
+            color='steelblue', style='italic')
+    
+    # Data Sources (top of Round 1)
+    data_sources = [
+        ('News\nHeadlines', 1.5, 7),
+        ('Technical\nIndicators', 3.25, 7),
+        ('Macro\nData', 5, 7),
+    ]
+    for label, x, y in data_sources:
+        circle = Circle((x, y), 0.5, fill=True, facecolor=colors['data'], 
+                            edgecolor='purple', linewidth=1.5)
+        ax.add_patch(circle)
+        ax.text(x, y, label, fontsize=7, ha='center', va='center', fontweight='bold')
+    
+    # Agents in Round 1 (isolated boxes)
+    agents_r1 = [
+        ('Sentiment\nAgent', 1.5, 5, colors['sentiment']),
+        ('Technical\nAgent', 3.25, 5, colors['technical']),
+        ('Macro\nAgent', 5, 5, colors['macro']),
+    ]
+    for label, x, y, color in agents_r1:
+        rect = FancyBboxPatch((x-0.7, y-0.5), 1.4, 1, boxstyle="round,pad=0.05", 
+                                   facecolor=color, edgecolor='black', linewidth=1.5)
+        ax.add_patch(rect)
+        ax.text(x, y, label, fontsize=8, ha='center', va='center', fontweight='bold')
+        
+        # Arrow from data to agent
+        ax.annotate('', xy=(x, y+0.5), xytext=(x, 6.5),
+                   arrowprops=dict(arrowstyle='->', color='purple', lw=1.5))
+    
+    # Fundamental Agent (uses external data)
+    rect = FancyBboxPatch((2.55, 2.8), 1.4, 1, boxstyle="round,pad=0.05", 
+                               facecolor=colors['fundamental'], edgecolor='black', linewidth=1.5)
+    ax.add_patch(rect)
+    ax.text(3.25, 3.3, 'Fundamental\nAgent', fontsize=8, ha='center', va='center', fontweight='bold')
+    ax.text(3.25, 2.5, '(SEC + FRED)', fontsize=7, ha='center', style='italic', color='gray')
+    
+    # Arrows from agents to "Beliefs R1" box
+    beliefs_r1 = FancyBboxPatch((2.25, 4.2), 2, 0.5, boxstyle="round,pad=0.02", 
+                                     facecolor='white', edgecolor='steelblue', linewidth=2)
+    ax.add_patch(beliefs_r1)
+    ax.text(3.25, 4.45, 'Initial Beliefs', fontsize=8, ha='center', va='center', 
+            fontweight='bold', color='steelblue')
+    
+    # === ROUND 2: BATTLE (Right side) ===
+    # Background box for Round 2
+    round2_box = Rectangle((6.5, 2), 7, 6.5, fill=True, 
+                                 facecolor=colors['round2'], edgecolor='darkorange', 
+                                 linewidth=2, alpha=0.5, zorder=0)
+    ax.add_patch(round2_box)
+    ax.text(10, 8.2, 'ROUND 2: BATTLE', fontsize=12, fontweight='bold', 
+            ha='center', color='darkorange')
+    ax.text(10, 7.8, '(Critique Opposing Views)', fontsize=9, ha='center', 
+            color='darkorange', style='italic')
+    
+    # Agents in Round 2 with critique arrows
+    agents_r2 = [
+        ('Sentiment', 7.5, 6, colors['sentiment']),
+        ('Technical', 10, 6, colors['technical']),
+        ('Macro', 12.5, 6, colors['macro']),
+    ]
+    for label, x, y, color in agents_r2:
+        rect = FancyBboxPatch((x-0.6, y-0.4), 1.2, 0.8, boxstyle="round,pad=0.05", 
+                                   facecolor=color, edgecolor='black', linewidth=1.5)
+        ax.add_patch(rect)
+        ax.text(x, y, label, fontsize=8, ha='center', va='center', fontweight='bold')
+    
+    # Fundamental in Round 2
+    rect = FancyBboxPatch((9.4, 4), 1.2, 0.8, boxstyle="round,pad=0.05", 
+                               facecolor=colors['fundamental'], edgecolor='black', linewidth=1.5)
+    ax.add_patch(rect)
+    ax.text(10, 4.4, 'Fundamental', fontsize=8, ha='center', va='center', fontweight='bold')
+    
+    # Battle arrows (bidirectional critique)
+    # Curved arrows between agents showing debate
+    from matplotlib.patches import FancyArrowPatch
+    import matplotlib.patches as mpatches
+    
+    # Draw debate arrows
+    debate_pairs = [
+        ((7.5, 5.5), (10, 5.5), 'red'),   # Sentiment <-> Technical
+        ((10, 5.5), (12.5, 5.5), 'red'),  # Technical <-> Macro
+        ((7.5, 5.5), (10, 4.8), 'red'),   # Sentiment <-> Fundamental
+        ((12.5, 5.5), (10, 4.8), 'red'),  # Macro <-> Fundamental
+    ]
+    
+    for start, end, color in debate_pairs:
+        ax.annotate('', xy=end, xytext=start,
+                   arrowprops=dict(arrowstyle='<->', color=color, lw=1.5,
+                                 connectionstyle='arc3,rad=0.2'))
+    
+    # Arrow from Round 1 to Round 2
+    ax.annotate('', xy=(6.5, 5), xytext=(5.5, 5),
+               arrowprops=dict(arrowstyle='->', color='black', lw=2.5))
+    ax.text(6, 5.3, 'Share\nOpposing\nViews', fontsize=7, ha='center', va='bottom')
+    
+    # === AGGREGATOR (Bottom) ===
+    agg_rect = FancyBboxPatch((8.5, 2.3), 3, 1, boxstyle="round,pad=0.1", 
+                                   facecolor=colors['aggregator'], edgecolor='darkgreen', 
+                                   linewidth=2)
+    ax.add_patch(agg_rect)
+    ax.text(10, 2.8, 'AGGREGATOR', fontsize=10, ha='center', va='center', fontweight='bold')
+    ax.text(10, 2.5, 'Compute Disagreement Dconf', fontsize=8, ha='center', style='italic')
+    
+    # Arrows from agents to aggregator
+    ax.annotate('', xy=(8.5, 2.8), xytext=(7.5, 5.5),
+               arrowprops=dict(arrowstyle='->', color='darkgreen', lw=1.5))
+    ax.annotate('', xy=(10, 3.3), xytext=(10, 4),
+               arrowprops=dict(arrowstyle='->', color='darkgreen', lw=1.5))
+    ax.annotate('', xy=(11.5, 2.8), xytext=(12.5, 5.5),
+               arrowprops=dict(arrowstyle='->', color='darkgreen', lw=1.5))
+    
+    # Output
+    output_rect = FancyBboxPatch((8.5, 0.5), 3, 0.8, boxstyle="round,pad=0.05", 
+                                      facecolor='white', edgecolor='black', linewidth=2)
+    ax.add_patch(output_rect)
+    ax.text(10, 0.9, 'Dconf, μt → Volatility Forecast', fontsize=9, ha='center', 
+            va='center', fontweight='bold')
+    
+    ax.annotate('', xy=(10, 1.3), xytext=(10, 2.3),
+               arrowprops=dict(arrowstyle='->', color='black', lw=2))
+    
+    # Legend
+    legend_items = [
+        (colors['data'], 'Data Sources'),
+        (colors['sentiment'], 'Belief Agents'),
+        (colors['aggregator'], 'Aggregator'),
+        ('red', 'Debate/Critique'),
+    ]
+    for i, (color, label) in enumerate(legend_items):
+        rect = Rectangle((0.7, 1.3 - i*0.4), 0.3, 0.25, facecolor=color, edgecolor='black')
+        ax.add_patch(rect)
+        ax.text(1.1, 1.42 - i*0.4, label, fontsize=8, va='center')
+    
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f"Topology diagram saved to {save_path}")
+    
+    plt.close()
+
+
+def create_residuals_figure(
+    garch_baseline: Dict,
+    garch_x: Dict,
+    save_path: str = None
+) -> None:
+    """
+    Create GARCH Residual Diagnostics: Baseline vs GARCH-X comparison.
+    
+    Four-panel plot showing:
+    - Top Left: Baseline GARCH standardized residuals
+    - Top Right: GARCH-X standardized residuals
+    - Bottom Left: Residual histograms comparison
+    - Bottom Right: Q-Q plots comparison
+    
+    Args:
+        garch_baseline: Baseline GARCH results dictionary
+        garch_x: GARCH-X results dictionary
+        save_path: Path to save the figure (default: output/residuals.png)
+    """
+    save_path = save_path or os.path.join(config.OUTPUT_DIR, "residuals.png")
+    
+    # Check if models are available
+    if garch_baseline is None or garch_x is None:
+        print("Warning: GARCH models not available, skipping residuals plot")
+        return
+    
+    # Set style
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle('GARCH Residual Diagnostics: Baseline vs GARCH-X', 
+                 fontsize=14, fontweight='bold', y=0.98)
+    
+    # Get standardized residuals from both models
+    try:
+        baseline_resid = garch_baseline['results'].std_resid
+        garchx_resid = garch_x['results'].std_resid
+    except (KeyError, AttributeError) as e:
+        print(f"Warning: Could not extract residuals: {e}")
+        plt.close()
+        return
+    
+    # === Panel 1 (Top Left): Baseline GARCH Residuals Time Series ===
+    ax1 = axes[0, 0]
+    ax1.plot(baseline_resid, color='steelblue', alpha=0.7, linewidth=0.8)
+    ax1.axhline(y=0, color='black', linestyle='-', linewidth=1)
+    ax1.axhline(y=2, color='red', linestyle='--', linewidth=1, alpha=0.5)
+    ax1.axhline(y=-2, color='red', linestyle='--', linewidth=1, alpha=0.5)
+    ax1.set_title('Baseline GARCH(1,1) Standardized Residuals', fontsize=11, fontweight='bold')
+    ax1.set_xlabel('Observation', fontsize=10)
+    ax1.set_ylabel('Standardized Residual', fontsize=10)
+    ax1.set_ylim(-5, 5)
+    
+    # Add stats annotation
+    baseline_std = np.std(baseline_resid)
+    baseline_kurt = ((baseline_resid - np.mean(baseline_resid))**4).mean() / baseline_std**4
+    ax1.text(0.02, 0.98, f'Std: {baseline_std:.3f}\nKurtosis: {baseline_kurt:.2f}', 
+             transform=ax1.transAxes, fontsize=9, verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    # === Panel 2 (Top Right): GARCH-X Residuals Time Series ===
+    ax2 = axes[0, 1]
+    ax2.plot(garchx_resid, color='darkorange', alpha=0.7, linewidth=0.8)
+    ax2.axhline(y=0, color='black', linestyle='-', linewidth=1)
+    ax2.axhline(y=2, color='red', linestyle='--', linewidth=1, alpha=0.5)
+    ax2.axhline(y=-2, color='red', linestyle='--', linewidth=1, alpha=0.5)
+    ax2.set_title('GARCH-X Standardized Residuals', fontsize=11, fontweight='bold')
+    ax2.set_xlabel('Observation', fontsize=10)
+    ax2.set_ylabel('Standardized Residual', fontsize=10)
+    ax2.set_ylim(-5, 5)
+    
+    # Add stats annotation
+    garchx_std = np.std(garchx_resid)
+    garchx_kurt = ((garchx_resid - np.mean(garchx_resid))**4).mean() / garchx_std**4
+    ax2.text(0.02, 0.98, f'Std: {garchx_std:.3f}\nKurtosis: {garchx_kurt:.2f}', 
+             transform=ax2.transAxes, fontsize=9, verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    # === Panel 3 (Bottom Left): Histogram Comparison ===
+    ax3 = axes[1, 0]
+    bins = np.linspace(-4, 4, 40)
+    ax3.hist(baseline_resid, bins=bins, alpha=0.5, color='steelblue', 
+             label=f'Baseline (σ={baseline_std:.2f})', density=True, edgecolor='white')
+    ax3.hist(garchx_resid, bins=bins, alpha=0.5, color='darkorange', 
+             label=f'GARCH-X (σ={garchx_std:.2f})', density=True, edgecolor='white')
+    
+    # Add normal distribution overlay
+    x = np.linspace(-4, 4, 100)
+    from scipy.stats import norm
+    ax3.plot(x, norm.pdf(x), 'k--', linewidth=2, label='N(0,1)')
+    
+    ax3.set_title('Residual Distribution Comparison', fontsize=11, fontweight='bold')
+    ax3.set_xlabel('Standardized Residual', fontsize=10)
+    ax3.set_ylabel('Density', fontsize=10)
+    ax3.legend(loc='upper right', fontsize=9)
+    ax3.set_xlim(-4, 4)
+    
+    # === Panel 4 (Bottom Right): Q-Q Plot Comparison ===
+    ax4 = axes[1, 1]
+    from scipy.stats import probplot
+    
+    # Q-Q for baseline
+    (osm_b, osr_b), (slope_b, intercept_b, r_b) = probplot(baseline_resid, dist="norm")
+    ax4.scatter(osm_b, osr_b, alpha=0.5, s=20, color='steelblue', label='Baseline')
+    
+    # Q-Q for GARCH-X
+    (osm_x, osr_x), (slope_x, intercept_x, r_x) = probplot(garchx_resid, dist="norm")
+    ax4.scatter(osm_x, osr_x, alpha=0.5, s=20, color='darkorange', label='GARCH-X')
+    
+    # Reference line
+    xlim = ax4.get_xlim()
+    ax4.plot(xlim, xlim, 'k--', linewidth=2, label='Normal')
+    
+    ax4.set_title('Q-Q Plot: Residuals vs Normal Distribution', fontsize=11, fontweight='bold')
+    ax4.set_xlabel('Theoretical Quantiles', fontsize=10)
+    ax4.set_ylabel('Sample Quantiles', fontsize=10)
+    ax4.legend(loc='lower right', fontsize=9)
+    
+    # Add R² annotation
+    ax4.text(0.02, 0.98, f'Baseline R²: {r_b**2:.4f}\nGARCH-X R²: {r_x**2:.4f}', 
+             transform=ax4.transAxes, fontsize=9, verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f"Residuals diagnostic plot saved to {save_path}")
+    
+    plt.close()
+
+
 def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
     """
     Run the complete analysis pipeline.
@@ -853,6 +1249,15 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
     
     # Create timeline figure (fig3_timeline.png)
     create_timeline_figure(merged_df)
+    
+    # Create mean score vs realized volatility time-series plot
+    create_mean_score_vs_realized_volatility_timeseries(merged_df)
+    
+    # Create topology diagram (protocol visualization)
+    create_topology_figure()
+    
+    # Create GARCH residuals diagnostic plot
+    create_residuals_figure(garch_baseline, garch_x)
     
     # Summary statistics
     if verbose:
