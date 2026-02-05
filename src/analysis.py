@@ -627,8 +627,8 @@ def create_mean_score_figure(
         ax.legend(loc='upper right', fontsize=10)
         ax.grid(True, alpha=0.3)
         
-        # Invert X-axis so Bearish (-1.0) is on the left
-        ax.invert_xaxis()
+        # X-axis: Bearish (-1.0) on left, Bullish (+1.0) on right (standard convention)
+        # No inversion needed - default axis ordering is correct
         
         # Add labels for Bearish/Bullish
         ax.text(0.02, 0.02, '← Bearish', transform=ax.transAxes, fontsize=10, 
