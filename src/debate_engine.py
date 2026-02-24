@@ -101,6 +101,42 @@ class DebateRoom:
         except Exception as e:
             print(f"Cache write error: {e}")
     
+    def _run_diversity_calibration(self, verbose: bool = False) -> Dict[str, Any]:
+        """Calibrate agents when pairwise score correlation is persistently high."""
+        signals = self.aggregator.get_calibration_signals(
+            threshold=config.CORRELATION_THRESHOLD,
+            min_periods=config.CORRELATION_PERSISTENCE_DAYS
+        )
+
+        if not signals.get("high_pairs"):
+            return signals
+
+        agent_map = {agent.name.lower(): agent for agent in self.agents}
+        for pair_info in signals["high_pairs"]:
+            left_name, right_name = pair_info["pair"].split("__")
+            corr = pair_info["correlation"]
+            left = agent_map.get(left_name)
+            right = agent_map.get(right_name)
+            if left is None or right is None:
+                continue
+
+            left.adjust_calibration(
+                temperature_delta=config.CALIBRATION_TEMPERATURE_STEP,
+                prompt_style_hint=(
+                    "Increase contrarian framing. Prioritize edge cases and challenge consensus assumptions."
+                )
+            )
+            right.adjust_calibration(
+                temperature_delta=-config.CALIBRATION_TEMPERATURE_STEP / 2,
+                prompt_style_hint=(
+                    "Be stricter with evidence thresholds and avoid mirroring other agents' narratives."
+                )
+            )
+            if verbose:
+                print(f"  [CALIBRATION] {left_name}/{right_name} corr={corr:.3f} -> diversified prompt+temperature")
+
+        return signals
+
     def run_daily_debate(
         self,
         market_context: str,
@@ -131,6 +167,8 @@ class DebateRoom:
             print(f"Starting Debate for {self.ticker} on {date_str}")
             print(f"Rounds: {self.num_rounds}")
             print(f"{'='*60}")
+
+        calibration_signals = self._run_diversity_calibration(verbose=verbose)
         
         # Inject infobot data into context
         full_context = self._build_full_context(market_context, date)
@@ -243,7 +281,9 @@ class DebateRoom:
                 "mean_score": final_stats["mean_score"],
                 "avg_confidence": final_stats["avg_confidence"]
             },
-            "disagreement_signal": disagreement_signal
+            "disagreement_signal": disagreement_signal,
+            "calibration": calibration_signals,
+            "diversity_report": self.aggregator.build_diversity_report()
         }
     
     def _build_full_context(self, market_context: str, date: datetime) -> str:

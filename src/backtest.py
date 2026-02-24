@@ -10,10 +10,11 @@ Executes daily debates across the date range with:
 
 import os
 import time
+import json
 import pandas as pd
 import argparse
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from tqdm import tqdm
 
 from . import config
@@ -117,6 +118,7 @@ def run_backtest(
                 print(f"Resuming from {resume_from_date}, keeping {len(existing_results)} existing results")
     
     results = existing_results.copy()
+    diversity_report: Dict[str, Any] = {}
     
     # Process each ticker
     for ticker in tickers:
@@ -192,11 +194,15 @@ def run_backtest(
                     "num_rounds": num_rounds
                 }
                 
-                # Add individual agent data
+                # Add disagreement diagnostics (agent-level + pairwise decomposition)
                 signal = debate_result.get("disagreement_signal", {})
-                for key in ["score_fundamental", "score_sentiment", "score_technical", "score_macro",
-                           "confidence_fundamental", "confidence_sentiment", "confidence_technical", "confidence_macro"]:
-                    row[key] = signal.get(key, 0.0)
+                for key, value in signal.items():
+                    if key in {"disagreement_conf", "mean_score", "avg_confidence"}:
+                        continue
+                    row[key] = value
+
+                # Keep diversity report from latest day for file output
+                diversity_report = debate_result.get("diversity_report", {})
                 
                 results.append(row)
                 
@@ -214,6 +220,10 @@ def run_backtest(
     
     # Save final results
     df = _save_results(results)
+
+    if diversity_report:
+        with open(config.DIVERSITY_REPORT_PATH, "w") as f:
+            json.dump(diversity_report, f, indent=2)
     
     if verbose:
         print(f"\nBacktest complete!")

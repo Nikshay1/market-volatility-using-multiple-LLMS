@@ -23,6 +23,7 @@ LLM_BACKEND: str = os.environ.get("LLM_BACKEND", "ollama")
 OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.environ.get("OLLAMA_MODEL", "mistral")
 OLLAMA_TEMPERATURE: float = 0.7  # Increased to force heterogeneity
+OLLAMA_TOP_P: float = float(os.environ.get("OLLAMA_TOP_P", "0.9"))
 OLLAMA_MAX_TOKENS: int = 1024
 
 
@@ -44,7 +45,30 @@ def get_groq_api_key() -> str:
 GROQ_API_KEY: Optional[str] = os.environ.get("GROQ_API_KEY")
 GROQ_MODEL: str = "llama-3.1-8b-instant"
 GROQ_TEMPERATURE: float = 0.7  # Increased to force heterogeneity
+GROQ_TOP_P: float = float(os.environ.get("GROQ_TOP_P", "0.9"))
 GROQ_MAX_TOKENS: int = 1024
+
+
+# ============================================================
+# Per-Agent Model Controls
+# ============================================================
+
+SENTIMENT_MODEL: str = os.environ.get("SENTIMENT_MODEL", "")
+SENTIMENT_TEMPERATURE: float = float(os.environ.get("SENTIMENT_TEMPERATURE", "0.85"))
+SENTIMENT_TOP_P: float = float(os.environ.get("SENTIMENT_TOP_P", "0.95"))
+
+TECHNICAL_MODEL: str = os.environ.get("TECHNICAL_MODEL", "")
+TECHNICAL_TEMPERATURE: float = float(os.environ.get("TECHNICAL_TEMPERATURE", "0.55"))
+TECHNICAL_TOP_P: float = float(os.environ.get("TECHNICAL_TOP_P", "0.8"))
+
+MACRO_MODEL: str = os.environ.get("MACRO_MODEL", "")
+MACRO_TEMPERATURE: float = float(os.environ.get("MACRO_TEMPERATURE", "0.65"))
+MACRO_TOP_P: float = float(os.environ.get("MACRO_TOP_P", "0.85"))
+
+# Calibration controls
+CORRELATION_THRESHOLD: float = float(os.environ.get("CORRELATION_THRESHOLD", "0.8"))
+CORRELATION_PERSISTENCE_DAYS: int = int(os.environ.get("CORRELATION_PERSISTENCE_DAYS", "5"))
+CALIBRATION_TEMPERATURE_STEP: float = float(os.environ.get("CALIBRATION_TEMPERATURE_STEP", "0.1"))
 
 
 # ============================================================
@@ -118,6 +142,7 @@ DISAGREEMENT_SIGNALS_PATH: str = os.path.join(DATA_DIR, "disagreement_signals.cs
 # Output files
 RESULTS_PLOT_PATH: str = os.path.join(OUTPUT_DIR, "results.png")
 HEADLINE_COVERAGE_STATS_PATH: str = os.path.join(OUTPUT_DIR, "headline_coverage_stats.csv")
+DIVERSITY_REPORT_PATH: str = os.path.join(OUTPUT_DIR, "diversity_report.json")
 
 
 # ============================================================
