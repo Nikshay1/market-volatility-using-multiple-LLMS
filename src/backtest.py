@@ -20,7 +20,7 @@ from . import config
 from .data_loader import (
     fetch_market_data, fetch_multi_ticker_data, load_market_data,
     get_market_context_for_date, format_context_for_agent, fetch_news,
-    get_trading_dates
+    get_trading_dates, load_historical_news
 )
 from .debate_engine import DebateRoom
 from .disagreement import calculate_all_metrics
@@ -82,6 +82,9 @@ def run_backtest(
     start_date = start_date or config.START_DATE
     end_date = end_date or config.END_DATE
     num_rounds = num_rounds or config.DEBATE_ROUNDS
+
+    # Fail fast for research backtests if historical news is missing/malformed.
+    load_historical_news(strict=True)
     
     # If single ticker passed as string, convert to list
     if isinstance(tickers, str):
@@ -157,10 +160,24 @@ def run_backtest(
                     continue
                 
                 # Fetch news (also respects no look-ahead)
-                news = fetch_news(ticker, date)
+                news, news_metadata = fetch_news(ticker, date, return_metadata=True)
+
+                if news_metadata.get("is_low_information", False):
+                    if verbose:
+                        print(
+                            f"  Skipping {date.date()} for {ticker}: low-information news window "
+                            f"(threshold={news_metadata.get('threshold')}, "
+                            f"counts={news_metadata.get('date_counts', {})})"
+                        )
+                    continue
                 
                 # Format context
-                context_str = format_context_for_agent(market_context, news, ticker)
+                context_str = format_context_for_agent(
+                    market_context,
+                    news,
+                    ticker,
+                    news_metadata=news_metadata
+                )
                 
                 # Run debate
                 debate_result = room.run_daily_debate(context_str, date, verbose=False)

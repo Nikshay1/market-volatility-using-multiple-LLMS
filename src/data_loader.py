@@ -9,8 +9,9 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import feedparser
+from difflib import SequenceMatcher
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Tuple
 from tqdm import tqdm
 
 from . import config
@@ -223,8 +224,9 @@ def _get_fallback_headlines(ticker: str, date: datetime) -> List[str]:
 def fetch_news(
     ticker: str,
     date: datetime,
-    use_gnews: bool = False
-) -> List[str]:
+    use_gnews: bool = False,
+    return_metadata: bool = False
+) -> Union[List[str], Tuple[List[str], Dict[str, Union[int, str, bool, Dict[str, int]]]]]:
     """
     Fetch historical news from local CSV to avoid look-ahead bias.
     
@@ -233,47 +235,185 @@ def fetch_news(
     (data/historical_news.csv) and filters for headlines that appeared on or
     before the backtest date.
     
-    WEEKLY MODE: Since backtest runs on Fridays, we look back 7 days to capture
-    the entire week's news (Monday through Friday).
+    Dataset assumptions:
+    - historical_news.csv must exist and include Date/Ticker/Headline columns.
+    - Lookback window is configurable (3-7 trading days recommended).
+    - Headline deduplication removes exact and near-duplicate variants.
     
     Args:
         ticker: Stock ticker symbol
         date: The reference date (Friday - news must be <= this date)
         use_gnews: Ignored - kept for compatibility
+        return_metadata: If True, returns (headlines, metadata)
         
     Returns:
-        List of headline strings (up to 50 headlines from last 7 days)
+        List of headline strings, or (headlines, metadata) if return_metadata=True
     """
+    lookback_days = _validated_news_lookback_days(config.NEWS_LOOKBACK_DAYS)
+    min_headlines = max(1, config.NEWS_MIN_HEADLINES_PER_DAY)
+    similarity_threshold = config.NEWS_DEDUP_SIMILARITY_THRESHOLD
+
+    df = load_historical_news(strict=True)
+
+    target_date = pd.to_datetime(date).date()
+    start_date = target_date - timedelta(days=lookback_days + 3)
+
+    mask = (
+        (df['Ticker'] == ticker)
+        & (df['Date'].dt.date <= target_date)
+        & (df['Date'].dt.date >= start_date)
+    )
+    scoped = df[mask].copy().sort_values('Date', ascending=False)
+    if scoped.empty:
+        metadata = {
+            "is_low_information": True,
+            "headline_count": 0,
+            "source_counts": {},
+            "date_counts": {},
+            "lookback_days": lookback_days,
+            "threshold": min_headlines,
+            "ticker": ticker,
+            "date": target_date.isoformat()
+        }
+        _log_headline_coverage(ticker, target_date, metadata)
+        return ([], metadata) if return_metadata else []
+
+    recent_dates = sorted(scoped['Date'].dt.date.unique(), reverse=True)[:lookback_days]
+    scoped = scoped[scoped['Date'].dt.date.isin(recent_dates)].copy()
+
+    deduped_rows = _deduplicate_news_rows(scoped, similarity_threshold)
+    headlines = [row['Headline'] for row in deduped_rows]
+
+    day_counts = {}
+    for row in deduped_rows:
+        day_key = row['Date'].date().isoformat()
+        day_counts[day_key] = day_counts.get(day_key, 0) + 1
+
+    source_counts: Dict[str, int] = {}
+    for row in deduped_rows:
+        source = str(row.get('Source', 'unknown')).strip() or 'unknown'
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+    low_info_days = [d for d, c in day_counts.items() if c < min_headlines]
+    metadata = {
+        "is_low_information": bool(low_info_days),
+        "headline_count": len(headlines),
+        "source_counts": source_counts,
+        "date_counts": day_counts,
+        "low_information_days": low_info_days,
+        "lookback_days": lookback_days,
+        "threshold": min_headlines,
+        "ticker": ticker,
+        "date": target_date.isoformat()
+    }
+
+    _log_headline_coverage(ticker, target_date, metadata)
+
+    if return_metadata:
+        return headlines, metadata
+    return headlines
+
+
+def load_historical_news(strict: bool = True) -> pd.DataFrame:
+    """Load and validate historical news dataset."""
     csv_path = os.path.join(config.DATA_DIR, "historical_news.csv")
-    
     if not os.path.exists(csv_path):
-        print(f"Warning: historical_news.csv not found at {csv_path}")
-        print("Falling back to RSS. Run scripts/import_kaggle.py to create historical data.")
-        return fetch_news_rss(ticker, date)
-    
-    try:
-        # Load CSV (In production, consider caching this)
-        df = pd.read_csv(csv_path)
-        df['Date'] = pd.to_datetime(df['Date'])
-        
-        target_date = pd.to_datetime(date).date()
-        
-        # Get news from TODAY only (daily mode - most recent 24h news)
-        mask = (df['Ticker'] == ticker) & \
-               (df['Date'].dt.date <= target_date) & \
-               (df['Date'].dt.date >= target_date - timedelta(days=1))
-        
-        # Get up to 10 headlines from today
-        headlines = df[mask].sort_values('Date', ascending=False)['Headline'].head(10).tolist()
-        
-        if headlines:
-            return headlines
-        else:
-            return ["No significant news found for this period."]
-            
-    except Exception as e:
-        print(f"News CSV error: {e}")
-        return fetch_news_rss(ticker, date)
+        message = (
+            f"Required historical news file is missing: {csv_path}. "
+            "Run scripts/import_kaggle.py before research backtests."
+        )
+        if strict:
+            raise FileNotFoundError(message)
+        print(f"Warning: {message}")
+        return pd.DataFrame()
+
+    df = pd.read_csv(csv_path)
+    required_cols = {"Date", "Ticker", "Headline"}
+    missing_cols = required_cols - set(df.columns)
+    if missing_cols:
+        raise ValueError(
+            "historical_news.csv is missing required columns: "
+            f"{sorted(missing_cols)}"
+        )
+
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    if df['Date'].isna().any():
+        raise ValueError("historical_news.csv contains invalid Date values.")
+
+    df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
+    df['Headline'] = df['Headline'].astype(str).str.strip()
+    if 'Source' not in df.columns:
+        df['Source'] = 'unknown'
+    else:
+        df['Source'] = df['Source'].fillna('unknown').astype(str).str.strip().replace('', 'unknown')
+
+    return df
+
+
+def _validated_news_lookback_days(lookback_days: int) -> int:
+    """Validate lookback days for historical news context windows."""
+    if 3 <= lookback_days <= 7:
+        return lookback_days
+    raise ValueError(
+        f"NEWS_LOOKBACK_DAYS must be between 3 and 7 (received {lookback_days})."
+    )
+
+
+def _deduplicate_news_rows(rows: pd.DataFrame, similarity_threshold: float) -> List[Dict]:
+    """Deduplicate by exact match and near-duplicate semantic string similarity."""
+    deduped: List[Dict] = []
+    seen_exact = set()
+
+    for _, row in rows.iterrows():
+        headline = str(row['Headline']).strip()
+        normalized = headline.lower()
+        if not normalized or normalized in seen_exact:
+            continue
+
+        is_similar = any(
+            SequenceMatcher(None, normalized, existing['Headline'].lower()).ratio() >= similarity_threshold
+            for existing in deduped
+        )
+        if is_similar:
+            continue
+
+        seen_exact.add(normalized)
+        deduped.append({
+            "Date": row['Date'],
+            "Ticker": row['Ticker'],
+            "Headline": headline,
+            "Source": row.get('Source', 'unknown')
+        })
+
+    return deduped
+
+
+def _log_headline_coverage(ticker: str, date: datetime.date, metadata: Dict[str, Union[int, str, bool, Dict[str, int]]]) -> None:
+    """Append headline coverage stats for methods appendix."""
+    path = config.HEADLINE_COVERAGE_STATS_PATH
+    rows = []
+    date_counts = metadata.get('date_counts', {}) if isinstance(metadata, dict) else {}
+    if date_counts:
+        for news_date, count in date_counts.items():
+            rows.append({
+                "asof_date": date.isoformat(),
+                "ticker": ticker,
+                "news_date": news_date,
+                "headline_count": count,
+                "is_low_information": metadata.get('is_low_information', False)
+            })
+    else:
+        rows.append({
+            "asof_date": date.isoformat(),
+            "ticker": ticker,
+            "news_date": "",
+            "headline_count": 0,
+            "is_low_information": True
+        })
+
+    coverage_df = pd.DataFrame(rows)
+    write_header = not os.path.exists(path)
+    coverage_df.to_csv(path, mode='a', header=write_header, index=False)
 
 
 def _fetch_news_gnews(ticker: str, date: datetime) -> List[str]:
@@ -383,7 +523,8 @@ def get_market_context_for_date(
 def format_context_for_agent(
     market_context: Dict,
     news_headlines: List[str],
-    ticker: str = None
+    ticker: str = None,
+    news_metadata: Optional[Dict] = None
 ) -> str:
     """
     Format market context and news into a prompt-ready string.
@@ -403,6 +544,12 @@ def format_context_for_agent(
         news_section = "\n".join([f"  • {h}" for h in news_headlines[:8]])
     else:
         news_section = "  No recent headlines available"
+
+    news_metadata = news_metadata or {}
+    source_counts = news_metadata.get('source_counts', {})
+    date_counts = news_metadata.get('date_counts', {})
+    source_summary = ", ".join([f"{k}:{v}" for k, v in sorted(source_counts.items())]) or "N/A"
+    date_summary = ", ".join([f"{k}:{v}" for k, v in sorted(date_counts.items())]) or "N/A"
     
     context = f"""
 === MARKET ANALYSIS FOR {ticker} ===
@@ -418,6 +565,9 @@ PRICE DATA:
 - Average Volume: {market_context.get('avg_volume', 0):,}
 
 RECENT NEWS & HEADLINES:
+- Headline Count: {news_metadata.get('headline_count', len(news_headlines))}
+- Source Coverage: {source_summary}
+- Date Coverage: {date_summary}
 {news_section}
 """
     
