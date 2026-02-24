@@ -446,6 +446,208 @@ def diebold_mariano_test(loss_baseline: np.ndarray, loss_model: np.ndarray) -> D
     }
 
 
+def _improvement_summary(garch_baseline: Dict, variance_model: Dict) -> Dict[str, float]:
+    """Compute relative improvements (positive = disagreement model better)."""
+    if not garch_baseline or not variance_model:
+        return {}
+
+    return {
+        'rmse_improvement_pct': (garch_baseline['rmse'] - variance_model['rmse']) / garch_baseline['rmse'] * 100,
+        'mae_improvement_pct': (garch_baseline['mae'] - variance_model['mae']) / garch_baseline['mae'] * 100,
+        'qlike_improvement_pct': (garch_baseline['qlike'] - variance_model['qlike']) / garch_baseline['qlike'] * 100,
+    }
+
+
+def add_regime_bucket(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach regime bucket labels based on config.REGIME_WINDOWS."""
+    out = df.copy()
+    out['regime_bucket'] = 'outside_defined_regimes'
+    out['date'] = pd.to_datetime(out['date'])
+
+    for regime_name, (start, end) in config.REGIME_WINDOWS.items():
+        mask = (out['date'] >= pd.Timestamp(start)) & (out['date'] <= pd.Timestamp(end))
+        out.loc[mask, 'regime_bucket'] = regime_name
+
+    return out
+
+
+def compute_subperiod_performance_tables(forecast_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """Compute subperiod error/improvement tables for regime buckets and rolling windows."""
+    if forecast_df is None or forecast_df.empty:
+        return {
+            'regime_table': pd.DataFrame(),
+            'rolling_table': pd.DataFrame()
+        }
+
+    work = forecast_df.copy()
+    work['date'] = pd.to_datetime(work['date'])
+    work = add_regime_bucket(work)
+
+    regime_rows = []
+    for regime, grp in work.groupby('regime_bucket'):
+        if len(grp) < 10:
+            continue
+        g_rmse = np.sqrt(np.mean(grp['garch_sq_error']))
+        v_rmse = np.sqrt(np.mean(grp['variance_sq_error']))
+        g_mae = np.mean(np.abs(grp['realized_vol'] - grp['garch_pred_vol']))
+        v_mae = np.mean(np.abs(grp['realized_vol'] - grp['variance_pred_vol']))
+        regime_rows.append({
+            'regime': regime,
+            'n_obs': len(grp),
+            'garch_rmse': g_rmse,
+            'variance_rmse': v_rmse,
+            'rmse_improvement_pct': (g_rmse - v_rmse) / g_rmse * 100 if g_rmse > 0 else np.nan,
+            'garch_mae': g_mae,
+            'variance_mae': v_mae,
+            'mae_improvement_pct': (g_mae - v_mae) / g_mae * 100 if g_mae > 0 else np.nan,
+        })
+    regime_table = pd.DataFrame(regime_rows).sort_values('regime') if regime_rows else pd.DataFrame()
+
+    window = config.ROBUSTNESS_ROLLING_WINDOW_DAYS
+    rolling_rows = []
+    for start_idx in range(0, len(work) - window + 1):
+        chunk = work.iloc[start_idx:start_idx + window]
+        g_rmse = np.sqrt(np.mean(chunk['garch_sq_error']))
+        v_rmse = np.sqrt(np.mean(chunk['variance_sq_error']))
+        dm = diebold_mariano_test(chunk['garch_sq_error'].values, chunk['variance_sq_error'].values)
+        rolling_rows.append({
+            'window_start': chunk['date'].iloc[0],
+            'window_end': chunk['date'].iloc[-1],
+            'n_obs': len(chunk),
+            'rmse_improvement_pct': (g_rmse - v_rmse) / g_rmse * 100 if g_rmse > 0 else np.nan,
+            'dm_p_value': dm['p_value']
+        })
+    rolling_table = pd.DataFrame(rolling_rows)
+
+    return {
+        'regime_table': regime_table,
+        'rolling_table': rolling_table
+    }
+
+
+def evaluate_robust_success(rolling_table: pd.DataFrame, variance_model: Dict) -> Dict[str, any]:
+    """Require consistent sign and significance in multiple windows before claiming success."""
+    if rolling_table is None or rolling_table.empty or not variance_model:
+        return {
+            'success': False,
+            'pass_windows': 0,
+            'required_windows': config.ROBUSTNESS_MIN_PASS_WINDOWS,
+            'reason': 'insufficient_rolling_windows'
+        }
+
+    positive_rmse = rolling_table['rmse_improvement_pct'] > 0
+    significant = rolling_table['dm_p_value'] < config.SIGNIFICANCE_ALPHA
+    pass_windows = int((positive_rmse & significant).sum())
+
+    lag_coefs = [variance_model.get('d_l1_coef'), variance_model.get('d_l5_coef')]
+    lag_coefs = [x for x in lag_coefs if x is not None and np.isfinite(x)]
+    sign_consistent = len(lag_coefs) > 0 and (all(x > 0 for x in lag_coefs) or all(x < 0 for x in lag_coefs))
+
+    success = pass_windows >= config.ROBUSTNESS_MIN_PASS_WINDOWS and sign_consistent
+    return {
+        'success': success,
+        'pass_windows': pass_windows,
+        'required_windows': config.ROBUSTNESS_MIN_PASS_WINDOWS,
+        'sign_consistent': sign_consistent,
+        'reason': 'pass' if success else 'failed_significance_or_sign'
+    }
+
+
+def run_model_suite(merged_df: pd.DataFrame, label: str, save_forecast_csv: bool = False) -> Dict[str, any]:
+    """Run baseline/disagreement models for a specific sample (ticker or pooled)."""
+    df = merged_df.sort_values('date').copy()
+    daily_returns = df['Log_Return'].values
+    daily_disagreement = df['disagreement_conf'].values
+
+    garch_baseline = fit_garch_baseline(daily_returns)
+    variance_model = fit_garch_x(daily_returns, daily_disagreement) if len(daily_disagreement) > 50 else None
+    dm_test = None
+    forecast_table = None
+
+    if garch_baseline and variance_model:
+        baseline_sq_err = (garch_baseline['test_realized_vol'] - garch_baseline['test_pred_vol']) ** 2
+        variance_sq_err = (variance_model['test_realized_vol'] - variance_model['test_pred_vol']) ** 2
+        dm_test = diebold_mariano_test(baseline_sq_err, variance_sq_err)
+
+        test_dates = df['date'].iloc[garch_baseline['train_n']:].reset_index(drop=True)
+        forecast_table = pd.DataFrame({
+            'date': test_dates,
+            'realized_vol': garch_baseline['test_realized_vol'],
+            'garch_pred_vol': garch_baseline['test_pred_vol'],
+            'variance_pred_vol': variance_model['test_pred_vol'],
+            'garch_sq_error': baseline_sq_err,
+            'variance_sq_error': variance_sq_err,
+            'analysis_label': label
+        })
+
+        if save_forecast_csv:
+            forecast_path = os.path.join(config.OUTPUT_DIR, f'test_forecasts_{label}.csv')
+            forecast_table.to_csv(forecast_path, index=False)
+
+    subperiod_tables = compute_subperiod_performance_tables(forecast_table)
+    robustness = evaluate_robust_success(subperiod_tables['rolling_table'], variance_model)
+
+    return {
+        'garch_baseline': garch_baseline,
+        'variance_model': variance_model,
+        'dm_test': dm_test,
+        'improvement': _improvement_summary(garch_baseline, variance_model),
+        'forecast_table': forecast_table,
+        'subperiod': subperiod_tables,
+        'robust_success': robustness
+    }
+
+
+def write_robustness_summary_markdown(panel_results: Dict[str, Dict[str, any]]) -> str:
+    """Write concise markdown summary for dissertation/report inclusion."""
+    rows = []
+    for label, res in panel_results.items():
+        imp = res.get('improvement', {})
+        rob = res.get('robust_success', {})
+        rows.append({
+            'label': label,
+            'rmse_improvement_pct': imp.get('rmse_improvement_pct', np.nan),
+            'mae_improvement_pct': imp.get('mae_improvement_pct', np.nan),
+            'qlike_improvement_pct': imp.get('qlike_improvement_pct', np.nan),
+            'success': rob.get('success', False),
+            'pass_windows': rob.get('pass_windows', 0)
+        })
+
+    summary_df = pd.DataFrame(rows)
+    valid = summary_df['rmse_improvement_pct'].dropna()
+    median_improvement = valid.median() if not valid.empty else np.nan
+    dispersion = valid.std(ddof=1) if len(valid) > 1 else np.nan
+
+    lines = [
+        "# Robustness Summary",
+        "",
+        "## Panel-level results",
+        "",
+        "| Sample | RMSE imp. (%) | MAE imp. (%) | QLIKE imp. (%) | Robust pass | Pass windows |",
+        "|---|---:|---:|---:|---|---:|"
+    ]
+    for _, row in summary_df.sort_values('label').iterrows():
+        lines.append(
+            f"| {row['label']} | {row['rmse_improvement_pct']:.2f} | {row['mae_improvement_pct']:.2f} | "
+            f"{row['qlike_improvement_pct']:.2f} | {'Yes' if row['success'] else 'No'} | {row['pass_windows']} |"
+        )
+
+    lines.extend([
+        "",
+        "## Dispersion statistics",
+        "",
+        f"- Median RMSE improvement across pooled + per-ticker analyses: **{median_improvement:.2f}%**.",
+        f"- Cross-sample dispersion (std. dev.) of RMSE improvement: **{dispersion:.2f} pp**.",
+        f"- Success criterion: at least **{config.ROBUSTNESS_MIN_PASS_WINDOWS}** rolling windows with positive and significant (p < {config.SIGNIFICANCE_ALPHA}) gains plus consistent lag-coefficient sign.",
+    ])
+
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    with open(config.ROBUSTNESS_SUMMARY_PATH, 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines) + "\n")
+
+    return config.ROBUSTNESS_SUMMARY_PATH
+
+
 def create_visualization(
     df: pd.DataFrame,
     correlation_results: Dict,
@@ -1267,57 +1469,40 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         pval = correlation_results.get('pval_disagreement_conf', 1)
         print(f"   Disagreement ↔ Forward Vol: r={corr:.4f} (p={pval:.4f})")
     
-    # Fit GARCH models using DAILY DATA
-    # Now that debates run daily, merged_df contains daily observations
+    # Fit pooled + per-ticker analyses with robustness checks
     if verbose:
-        print("\n5. Fitting GARCH models...")
-    
-    # Get daily returns and disagreement from merged_df (now daily aligned)
+        print("\n5. Fitting pooled and per-ticker model suites...")
+
     merged_df = merged_df.sort_values('date')
-    
-    daily_returns = merged_df['Log_Return'].values
-    daily_disagreement = merged_df['disagreement_conf'].values
-    
-    if verbose:
-        print(f"   Using {len(daily_returns)} DAILY returns for GARCH fitting")
-        print(f"   (Clean alignment: daily debates → daily volatility)")
-    
-    # Fit baseline GARCH on daily returns
-    if verbose:
-        print("   Fitting baseline GARCH(1,1)...")
-    garch_baseline = fit_garch_baseline(daily_returns)
-    
-    # Fit disagreement-driven variance model
-    if verbose:
-        print("   Fitting disagreement-variance proxy model...")
-    
-    if len(daily_disagreement) > 50:
-        variance_model = fit_garch_x(daily_returns, daily_disagreement)
-    else:
-        if verbose:
-            print("   Warning: Insufficient data for variance proxy fitting")
-        variance_model = None
-    
-    dm_test = None
-    if garch_baseline and variance_model:
-        baseline_sq_err = (garch_baseline['test_realized_vol'] - garch_baseline['test_pred_vol']) ** 2
-        variance_sq_err = (variance_model['test_realized_vol'] - variance_model['test_pred_vol']) ** 2
-        dm_test = diebold_mariano_test(baseline_sq_err, variance_sq_err)
+    panel_results = {
+        'pooled': run_model_suite(merged_df, label='pooled', save_forecast_csv=True)
+    }
 
-        test_dates = merged_df['date'].iloc[garch_baseline['train_n']:].reset_index(drop=True)
-        forecast_table = pd.DataFrame({
-            'date': test_dates,
-            'realized_vol': garch_baseline['test_realized_vol'],
-            'garch_pred_vol': garch_baseline['test_pred_vol'],
-            'variance_pred_vol': variance_model['test_pred_vol'],
-            'garch_sq_error': baseline_sq_err,
-            'variance_sq_error': variance_sq_err
-        })
-        forecast_output_path = os.path.join(config.OUTPUT_DIR, 'test_forecasts.csv')
-        forecast_table.to_csv(forecast_output_path, index=False)
+    if 'ticker' in merged_df.columns:
+        for ticker, ticker_df in merged_df.groupby('ticker'):
+            panel_results[ticker] = run_model_suite(ticker_df, label=ticker, save_forecast_csv=True)
 
-        if verbose:
-            print(f"   Saved out-of-sample forecast table to {forecast_output_path}")
+    pooled = panel_results['pooled']
+    garch_baseline = pooled['garch_baseline']
+    variance_model = pooled['variance_model']
+    dm_test = pooled['dm_test']
+    pooled_regime_table = pooled['subperiod']['regime_table']
+    pooled_rolling_table = pooled['subperiod']['rolling_table']
+
+    if not pooled_regime_table.empty:
+        pooled_regime_table.to_csv(
+            os.path.join(config.OUTPUT_DIR, 'subperiod_regime_performance_pooled.csv'),
+            index=False
+        )
+    if not pooled_rolling_table.empty:
+        pooled_rolling_table.to_csv(
+            os.path.join(config.OUTPUT_DIR, 'subperiod_rolling_performance_pooled.csv'),
+            index=False
+        )
+
+    summary_path = write_robustness_summary_markdown(panel_results)
+    if verbose:
+        print(f"   Wrote robustness summary: {summary_path}")
     
     # Create visualization
     if verbose:
@@ -1352,12 +1537,25 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         print(f"   Mean forward vol: {merged_df['Forward_Volatility'].mean():.4f}")
         print(f"   Mean confidence: {merged_df['avg_confidence'].mean():.4f}")
     
+    panel_improvements = [
+        res.get('improvement', {}).get('rmse_improvement_pct')
+        for res in panel_results.values()
+        if res.get('improvement', {}).get('rmse_improvement_pct') is not None
+    ]
+
     results = {
         'merged_data': merged_df,
         'correlation': correlation_results,
         'garch_baseline': garch_baseline,
         'variance_model': variance_model,
         'dm_test': dm_test,
+        'subperiod_regime_table': pooled_regime_table,
+        'subperiod_rolling_table': pooled_rolling_table,
+        'panel_results': panel_results,
+        'robustness_summary_path': summary_path,
+        'median_rmse_improvement_pct': float(np.nanmedian(panel_improvements)) if panel_improvements else np.nan,
+        'rmse_improvement_dispersion_pct': float(np.nanstd(panel_improvements, ddof=1)) if len(panel_improvements) > 1 else np.nan,
+        'robust_success': pooled.get('robust_success', {}).get('success', False),
         'disagreement_improves_model': (
             variance_model is not None and 
             garch_baseline is not None and
@@ -1370,9 +1568,12 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         print("ANALYSIS COMPLETE")
         print("="*60)
         if results['disagreement_improves_model']:
-            print("✓ Disagreement signal IMPROVES volatility forecasting!")
+            print("✓ Pooled disagreement signal improves volatility forecasting!")
         else:
-            print("✗ Disagreement signal does not improve model (or fitting failed)")
+            print("✗ Pooled disagreement signal does not improve model (or fitting failed)")
+        print(f"   Robust success rule satisfied: {results['robust_success']}")
+        print(f"   Panel median RMSE improvement: {results['median_rmse_improvement_pct']:.2f}%")
+        print(f"   Panel RMSE dispersion: {results['rmse_improvement_dispersion_pct']:.2f} pp")
     
     return results
 
@@ -1477,6 +1678,23 @@ def print_detailed_report(results: Dict) -> None:
         print(f"    GARCH QLIKE:                 {baseline['qlike']:.6f}")
         print(f"    Disagreement Variance QLIKE: {variance_model['qlike']:.6f}")
         print(f"    QLIKE improvement:           {qlike_improvement:.2f}%")
+
+    regime_table = results.get('subperiod_regime_table')
+    rolling_table = results.get('subperiod_rolling_table')
+    if regime_table is not None and not regime_table.empty:
+        print("\nSubperiod Performance (Regime Buckets):")
+        print(regime_table.to_string(index=False))
+
+    if rolling_table is not None and not rolling_table.empty:
+        pass_windows = int(((rolling_table['rmse_improvement_pct'] > 0) & (rolling_table['dm_p_value'] < config.SIGNIFICANCE_ALPHA)).sum())
+        print("\nRolling-Window Robustness:")
+        print(f"  Window size (days): {config.ROBUSTNESS_ROLLING_WINDOW_DAYS}")
+        print(f"  Passing windows: {pass_windows}/{len(rolling_table)}")
+
+    if 'median_rmse_improvement_pct' in results:
+        print("\nPanel Dispersion Summary:")
+        print(f"  Median RMSE improvement: {results['median_rmse_improvement_pct']:.2f}%")
+        print(f"  RMSE improvement dispersion: {results['rmse_improvement_dispersion_pct']:.2f} pp")
 
 
 if __name__ == "__main__":
