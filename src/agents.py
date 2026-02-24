@@ -39,7 +39,7 @@ class Agent(ABC):
     - reasoning: string
     """
     
-    def __init__(self, name: str, system_prompt: str):
+    def __init__(self, name: str, system_prompt: str, model: str = "", temperature: float = 0.7, top_p: float = 0.9):
         """
         Initialize the agent.
         
@@ -49,7 +49,23 @@ class Agent(ABC):
         """
         self.name = name
         self.system_prompt = system_prompt
+        self.model = model
+        self.temperature = temperature
+        self.top_p = top_p
+        self.prompt_style_hint = "Use your default analytical style."
         self._groq_client = None
+
+    def get_backend_model(self) -> str:
+        """Resolve the active model for the configured backend."""
+        if self.model:
+            return self.model
+        return config.OLLAMA_MODEL if config.LLM_BACKEND == "ollama" else config.GROQ_MODEL
+
+    def adjust_calibration(self, temperature_delta: float = 0.0, prompt_style_hint: Optional[str] = None):
+        """Apply calibration updates to diversify agent behavior."""
+        self.temperature = max(0.0, min(1.2, self.temperature + temperature_delta))
+        if prompt_style_hint:
+            self.prompt_style_hint = prompt_style_hint
     
     @property
     def groq_client(self):
@@ -84,13 +100,14 @@ class Agent(ABC):
         for attempt in range(max_retries):
             try:
                 response = ollama.chat(
-                    model=config.OLLAMA_MODEL,
+                    model=self.get_backend_model(),
                     messages=[
                         {"role": "system", "content": self.system_prompt},
                         {"role": "user", "content": prompt}
                     ],
                     options={
-                        "temperature": config.OLLAMA_TEMPERATURE,
+                        "temperature": self.temperature,
+                        "top_p": self.top_p,
                         "num_predict": config.OLLAMA_MAX_TOKENS
                     }
                 )
@@ -119,8 +136,9 @@ class Agent(ABC):
                         {"role": "system", "content": self.system_prompt},
                         {"role": "user", "content": prompt}
                     ],
-                    model=config.GROQ_MODEL,
-                    temperature=config.GROQ_TEMPERATURE,
+                    model=self.get_backend_model(),
+                    temperature=self.temperature,
+                    top_p=self.top_p,
                     max_tokens=config.GROQ_MAX_TOKENS
                 )
                 return chat_completion.choices[0].message.content
@@ -348,12 +366,31 @@ class SentimentAgent(Agent):
     {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise summary of drivers>"}"""
     
     def __init__(self):
-        super().__init__(name="Sentiment", system_prompt=self.SYSTEM_PROMPT)
+        super().__init__(
+            name="Sentiment",
+            system_prompt=self.SYSTEM_PROMPT,
+            model=config.SENTIMENT_MODEL,
+            temperature=config.SENTIMENT_TEMPERATURE,
+            top_p=config.SENTIMENT_TOP_P
+        )
+
+    def _build_agent_context(self, context: str) -> str:
+        price_block = re.search(r"PRICE DATA:(.*?)(?:RECENT NEWS & HEADLINES:|MACRO DATA:|$)", context, re.DOTALL)
+        news_block = re.search(r"RECENT NEWS & HEADLINES:(.*?)(?:MACRO DATA:|$)", context, re.DOTALL)
+        return (
+            "SENTIMENT FEATURES:\n"
+            f"{news_block.group(1).strip() if news_block else 'No headline data provided.'}\n\n"
+            "MARKET REACTION FEATURES:\n"
+            f"{price_block.group(1).strip() if price_block else 'No price context provided.'}"
+        )
     
     def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
+        scoped_context = self._build_agent_context(context)
         base_prompt = f"""Analyze the following data and provide your sentiment assessment:
 
-{context}
+{scoped_context}
+
+PROMPT STYLE: {self.prompt_style_hint}
 
 Based on the news and market psychology, evaluate the short-term sentiment direction."""
 
@@ -400,12 +437,30 @@ class TechnicalAgent(Agent):
     {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<technical setup description>"}"""
     
     def __init__(self):
-        super().__init__(name="Technical", system_prompt=self.SYSTEM_PROMPT)
+        super().__init__(
+            name="Technical",
+            system_prompt=self.SYSTEM_PROMPT,
+            model=config.TECHNICAL_MODEL,
+            temperature=config.TECHNICAL_TEMPERATURE,
+            top_p=config.TECHNICAL_TOP_P
+        )
+
+    def _build_agent_context(self, context: str) -> str:
+        price_block = re.search(r"PRICE DATA:(.*?)(?:RECENT NEWS & HEADLINES:|MACRO DATA:|$)", context, re.DOTALL)
+        price_text = price_block.group(1).strip() if price_block else "No price data provided."
+        filtered_lines = [
+            line for line in price_text.splitlines()
+            if any(key in line.lower() for key in ["daily return", "day return", "high", "low", "volatility", "volume"])
+        ]
+        return "TECHNICAL FEATURES:\n" + ("\n".join(filtered_lines) if filtered_lines else price_text)
     
     def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
+        scoped_context = self._build_agent_context(context)
         base_prompt = f"""Analyze the following data and provide your technical assessment:
 
-{context}
+{scoped_context}
+
+PROMPT STYLE: {self.prompt_style_hint}
 
 Based on the price action and technical indicators, evaluate the trend direction."""
 
@@ -452,12 +507,34 @@ class MacroAgent(Agent):
     {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise macro thesis>"}"""
     
     def __init__(self):
-        super().__init__(name="Macro", system_prompt=self.SYSTEM_PROMPT)
+        super().__init__(
+            name="Macro",
+            system_prompt=self.SYSTEM_PROMPT,
+            model=config.MACRO_MODEL,
+            temperature=config.MACRO_TEMPERATURE,
+            top_p=config.MACRO_TOP_P
+        )
+
+    def _build_agent_context(self, context: str) -> str:
+        macro_block = re.search(r"MACRO DATA:(.*)$", context, re.DOTALL)
+        price_block = re.search(r"PRICE DATA:(.*?)(?:RECENT NEWS & HEADLINES:|MACRO DATA:|$)", context, re.DOTALL)
+        price_text = price_block.group(1).strip() if price_block else ""
+        macro_text = macro_block.group(1).strip() if macro_block else "No macro data provided."
+        selected_price = [line for line in price_text.splitlines() if "volatility" in line.lower() or "return" in line.lower()]
+        return (
+            "MACRO FEATURES:\n"
+            f"{macro_text}\n\n"
+            "CROSS-ASSET MARKET FEATURES:\n"
+            f"{' '.join(selected_price) if selected_price else 'No return/volatility features provided.'}"
+        )
     
     def get_analysis_prompt(self, context: str, debate_context: Optional[str] = None) -> str:
+        scoped_context = self._build_agent_context(context)
         base_prompt = f"""Analyze the following data and provide your macroeconomic assessment:
 
-{context}
+{scoped_context}
+
+PROMPT STYLE: {self.prompt_style_hint}
 
 Based on the macro indicators, evaluate the risk environment for equities."""
 

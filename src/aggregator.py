@@ -6,6 +6,7 @@ belief formation system.
 """
 
 import numpy as np
+from itertools import combinations
 from typing import Dict, List, Any, Optional
 
 
@@ -21,6 +22,8 @@ class Aggregator:
     def __init__(self):
         """Initialize the Aggregator."""
         self.history: List[Dict[str, Any]] = []
+        self.score_history: List[Dict[str, float]] = []
+        self.pair_variance_history: List[Dict[str, float]] = []
     
     def compute_statistics(
         self,
@@ -80,18 +83,115 @@ class Aggregator:
         # Average confidence
         avg_confidence = np.mean(confidences)
         
+        agent_scores = {
+            output.get("agent_name", f"agent_{i}").lower(): float(scores[i])
+            for i, output in enumerate(agent_outputs)
+        }
+        pair_variance = self._compute_pairwise_variance(agent_outputs)
+
         result = {
             "mean_score": float(weighted_mean),
             "variance": float(weighted_variance),
             "avg_confidence": float(avg_confidence),
-            "num_agents": len(agent_outputs)
+            "num_agents": len(agent_outputs),
+            "pairwise_variance": pair_variance
         }
         
         # Store in history
         self.history.append(result)
+        self.score_history.append(agent_scores)
+        self.pair_variance_history.append(pair_variance)
         
         return result
     
+    def _compute_pairwise_variance(self, agent_outputs: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Compute between-agent disagreement decomposition by pair."""
+        pair_variance: Dict[str, float] = {}
+        normalized = []
+        for output in agent_outputs:
+            name = output.get("agent_name", "unknown").lower()
+            score = max(-1.0, min(1.0, float(output.get("score", 0.0))))
+            normalized.append((name, score))
+
+        for (left_name, left_score), (right_name, right_score) in combinations(normalized, 2):
+            key = f"pair_var_{left_name}_{right_name}"
+            pair_variance[key] = float(((left_score - right_score) ** 2) / 2.0)
+
+        return pair_variance
+
+    def get_pairwise_correlation(self) -> Dict[str, float]:
+        """Compute pairwise score correlation across historical days."""
+        if len(self.score_history) < 2:
+            return {}
+
+        agent_names = sorted({name for day in self.score_history for name in day.keys()})
+        correlations: Dict[str, float] = {}
+
+        for left_name, right_name in combinations(agent_names, 2):
+            left_series = []
+            right_series = []
+            for day in self.score_history:
+                if left_name in day and right_name in day:
+                    left_series.append(day[left_name])
+                    right_series.append(day[right_name])
+            if len(left_series) < 2:
+                continue
+            corr = float(np.corrcoef(left_series, right_series)[0, 1])
+            if np.isnan(corr):
+                continue
+            correlations[f"{left_name}__{right_name}"] = corr
+
+        return correlations
+
+    def get_calibration_signals(self, threshold: float, min_periods: int) -> Dict[str, Any]:
+        """Return persistent high-correlation pairs that should be diversified."""
+        if len(self.score_history) < min_periods:
+            return {"high_pairs": [], "pair_correlations": {}}
+
+        recent_scores = self.score_history[-min_periods:]
+        agent_names = sorted({name for day in recent_scores for name in day.keys()})
+        high_pairs = []
+        pair_correlations = {}
+
+        for left_name, right_name in combinations(agent_names, 2):
+            left_series = []
+            right_series = []
+            for day in recent_scores:
+                if left_name in day and right_name in day:
+                    left_series.append(day[left_name])
+                    right_series.append(day[right_name])
+            if len(left_series) < min_periods:
+                continue
+
+            corr = float(np.corrcoef(left_series, right_series)[0, 1])
+            if np.isnan(corr):
+                continue
+            key = f"{left_name}__{right_name}"
+            pair_correlations[key] = corr
+            if corr > threshold:
+                high_pairs.append({"pair": key, "correlation": corr})
+
+        return {"high_pairs": high_pairs, "pair_correlations": pair_correlations}
+
+    def build_diversity_report(self) -> Dict[str, Any]:
+        """Build a report that demonstrates whether agents are non-redundant."""
+        return {
+            "history_days": len(self.score_history),
+            "pairwise_correlation": self.get_pairwise_correlation(),
+            "average_pair_variance": self._average_pairwise_variance()
+        }
+
+    def _average_pairwise_variance(self) -> Dict[str, float]:
+        if not self.pair_variance_history:
+            return {}
+        sums: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        for day in self.pair_variance_history:
+            for key, value in day.items():
+                sums[key] = sums.get(key, 0.0) + value
+                counts[key] = counts.get(key, 0) + 1
+        return {key: sums[key] / counts[key] for key in sums}
+
     def format_opposing_argument(
         self,
         current_agent_output: Dict[str, Any],
@@ -185,6 +285,7 @@ RESPOND WITH YOUR UPDATED ASSESSMENT:
             "mean_score": stats["mean_score"],
             "avg_confidence": stats["avg_confidence"]
         }
+        result.update(stats.get("pairwise_variance", {}))
         
         # Add individual agent scores and confidences
         # Use agent_name from output, not position index (handles missing agents)
@@ -199,6 +300,8 @@ RESPOND WITH YOUR UPDATED ASSESSMENT:
     def reset(self):
         """Reset the aggregator history."""
         self.history = []
+        self.score_history = []
+        self.pair_variance_history = []
 
 
 def compute_confidence_weighted_variance(
