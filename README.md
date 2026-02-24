@@ -1,6 +1,6 @@
-# Agentic Dissonance v2: Multi-Agent Volatility Forecasting Framework
+# Agentic Dissonance v3: Multi-Agent Disagreement for Volatility Forecasting
 
-> **Research Framework for Measuring LLM Agent Disagreement as a Market Volatility Signal**
+> **Research framework for testing whether disagreement among heterogeneous LLM agents improves volatility prediction out-of-sample.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -9,727 +9,366 @@
 
 ## Table of Contents
 
-1. [Project Overview](#project-overview)
+1. [What This Project Proves](#what-this-project-proves)
 2. [Core Hypothesis](#core-hypothesis)
-3. [System Architecture](#system-architecture)
-4. [The Blind & Battle Protocol](#the-blind--battle-protocol)
-5. [Belief Agents Deep Dive](#belief-agents-deep-dive)
-6. [Data Sources & Infobots](#data-sources--infobots)
-7. [Disagreement Metrics](#disagreement-metrics)
-8. [GARCH-X Volatility Modeling](#garch-x-volatility-modeling)
-9. [Output Visualizations](#output-visualizations)
-10. [Installation & Setup](#installation--setup)
-11. [Command Reference](#command-reference)
-12. [File Structure](#file-structure)
-13. [Configuration Options](#configuration-options)
-14. [Troubleshooting](#troubleshooting)
+3. [What Changed in v3 (Research-Critical)](#what-changed-in-v3-research-critical)
+4. [System Architecture](#system-architecture)
+5. [Data Design and Anti-Leakage Rules](#data-design-and-anti-leakage-rules)
+6. [Agent and Debate Protocol](#agent-and-debate-protocol)
+7. [Disagreement Signal](#disagreement-signal)
+8. [Modeling and Evaluation](#modeling-and-evaluation)
+9. [Experiment Design for Professor-Grade Evidence](#experiment-design-for-professor-grade-evidence)
+10. [Repository Structure](#repository-structure)
+11. [Setup](#setup)
+12. [Command Reference](#command-reference)
+13. [Outputs and Artifacts](#outputs-and-artifacts)
+14. [Interpreting Results](#interpreting-results)
+15. [Known Limitations](#known-limitations)
+16. [Roadmap](#roadmap)
 
 ---
 
-## Project Overview
+## What This Project Proves
 
-**Agentic Dissonance** is a research framework that uses multiple LLM-powered agents to forecast market volatility. The core innovation: instead of using LLM outputs directly as trading signals, we measure the **disagreement** between agents as a proxy for market uncertainty.
+This project is not a trading bot.
 
-### Key Insight
+It is a **research testbed** for one specific scientific claim:
 
-When heterogeneous AI agents—each viewing the market through a different analytical lens—cannot reach consensus, it signals:
+> If specialized AI agents disagree more today, then tomorrow’s market volatility should be higher.
 
-- **High Disagreement → Uncertain market conditions → Higher expected volatility**
-- **Low Disagreement → Clear market consensus → Lower expected volatility**
-
-This framework implements the **Multi-Agent Debate protocol** (Du et al., 2023) adapted for financial volatility prediction.
+The key deliverable is therefore **out-of-sample forecasting evidence**, not just model fitting or pretty plots.
 
 ---
 
 ## Core Hypothesis
 
-```
-H₁: Agent disagreement (D_conf) positively correlates with next-day realized volatility (σᴿⱽ)
-
-σᴿⱽ_{t+1} = f(D_conf_t) + ε
+\[
+\sigma^{RV}_{t+1:t+h} = f(D_t, \text{market history}) + \varepsilon_t
+\]
 
 Where:
-- D_conf = Confidence-weighted variance of agent scores
-- σᴿⱽ = 5-day forward realized volatility (annualized)
-```
 
-The framework tests this hypothesis by:
+- \(D_t\): confidence-weighted disagreement among belief agents at date \(t\)
+- \(\sigma^{RV}_{t+1:t+h}\): future realized volatility over horizon \(h\)
 
-1. Running daily debates between 3 heterogeneous LLM agents
-2. Computing disagreement signals from their outputs
-3. Adding disagreement as an exogenous variable to GARCH models
-4. Comparing GARCH-X (with D_conf) vs baseline GARCH(1,1)
+**Research success criterion:**
+
+1. A disagreement-augmented volatility model beats a strong baseline **out-of-sample**.
+2. Improvement is robust across assets and market regimes.
+3. Improvement is statistically tested (not anecdotal).
+
+---
+
+## What Changed in v3 (Research-Critical)
+
+The framework has been re-focused around five fundamental improvements required for academically defensible results.
+
+### 1) Volatility model specification is aligned with the hypothesis
+
+Previously, disagreement risk could be inserted in ways that blur mean vs variance interpretation.
+
+**Now:** model design explicitly treats disagreement as a **volatility-relevant feature**, with transparent lagging and specification reporting.
+
+---
+
+### 2) Evaluation is out-of-sample first
+
+In-sample fit is no longer considered proof.
+
+**Now:**
+
+- rolling/recursive test forecasts are primary,
+- metrics are computed on held-out windows,
+- model comparison focuses on OOS RMSE/MAE/QLIKE,
+- optional forecast-comparison significance testing is recommended.
+
+---
+
+### 3) News context is quality-controlled
+
+Weak or generic headlines can destroy signal quality.
+
+**Now:**
+
+- historical news coverage is treated as a required dataset,
+- lookback windows are configurable,
+- coverage diagnostics are tracked,
+- low-information days can be flagged/excluded in primary analysis.
+
+---
+
+### 4) Agent heterogeneity is structural (not cosmetic)
+
+Prompt differences alone are often insufficient.
+
+**Now:** agent diversity is treated as a measurable property:
+
+- differentiated roles and feature focus,
+- independent scoring behavior monitored over time,
+- disagreement decomposition available for diagnostics.
+
+---
+
+### 5) Research scope is expanded for robustness
+
+Single ticker / single year evidence is fragile.
+
+**Now:** experiments are designed for multi-ticker, multi-regime validation to support generalizable conclusions.
 
 ---
 
 ## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          AGENTIC DISSONANCE v2                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
-│  │    DATA      │    │   INFOBOTS   │    │   MARKET     │                   │
-│  │    LOADER    │    │              │    │    DATA      │                   │
-│  │              │    │ • MacroBot   │    │              │                   │
-│  │ • yfinance   │────│ • VIX/TNX    │────│ • OHLCV      │                   │
-│  │ • News RSS   │    │ • Oil/DXY    │    │ • Returns    │                   │
-│  └──────────────┘    └──────────────┘    └──────────────┘                   │
-│          │                  │                   │                           │
-│          └──────────────────┴───────────────────┘                           │
-│                             │                                               │
-│                    ┌────────▼────────┐                                      │
-│                    │  CONTEXT STRING │                                      │
-│                    │   (formatted)   │                                      │
-│                    └────────┬────────┘                                      │
-│                             │                                               │
-│           ┌─────────────────┼─────────────────┐                             │
-│           ▼                 ▼                 ▼                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                       │
-│  │  SENTIMENT   │  │  TECHNICAL   │  │    MACRO     │                       │
-│  │    AGENT     │  │    AGENT     │  │    AGENT     │                       │
-│  │              │  │              │  │              │                       │
-│  │ • News       │  │ • Price      │  │ • VIX        │                       │
-│  │ • Headlines  │  │ • Momentum   │  │ • Rates      │                       │
-│  │ • Fear/Greed │  │ • Trends     │  │ • Risk-On/Off│                       │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                       │
-│         │                 │                 │                               │
-│         ▼                 ▼                 ▼                               │
-│  ┌──────────────────────────────────────────────────────┐                   │
-│  │              DEBATE ENGINE (Blind & Battle)          │                   │
-│  │                                                       │                  │
-│  │  Round 1: BLIND VOTE (agents analyze in isolation)   │                   │
-│  │  Round 2: BATTLE (agents critique opposing views)    │                   │
-│  └───────────────────────────┬──────────────────────────┘                   │
-│                              │                                              │
-│                     ┌────────▼────────┐                                     │
-│                     │   AGGREGATOR    │                                     │
-│                     │                 │                                     │
-│                     │ • Mean Score μt │                                     │
-│                     │ • D_conf        │                                     │
-│                     │ • Confidence    │                                     │
-│                     └────────┬────────┘                                     │
-│                              │                                              │
-│                     ┌────────▼────────┐                                     │
-│                     │    ANALYSIS     │                                     │
-│                     │                 │                                     │
-│                     │ • Correlation   │                                     │
-│                     │ • GARCH(1,1)    │                                     │
-│                     │ • GARCH-X       │                                     │
-│                     │ • Visualization │                                     │
-│                     └─────────────────┘                                     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+```text
+Market Data + Historical News + Macro Proxies
+                |
+                v
+      Context Builder (date-safe)
+                |
+                v
+     Multi-Agent Debate (Blind -> Critique)
+                |
+                v
+  Disagreement Signal Construction (D_conf)
+                |
+                v
+ Volatility Modeling (Baseline vs Disagreement-Augmented)
+                |
+                v
+Out-of-Sample Evaluation + Robustness Diagnostics
 ```
 
 ---
 
-## The Blind & Battle Protocol
+## Data Design and Anti-Leakage Rules
 
-The **Blind & Battle** protocol is specifically designed to prevent "herding"—where agents converge to the same opinion because they see group consensus.
+To keep the study academically valid:
 
-### Protocol Structure
+- **No look-ahead in market context**: each date uses only data available up to that date.
+- **No look-ahead in news**: only headlines published on/before decision time.
+- **No future fundamentals leakage**: avoid current snapshot fundamentals for historical dates unless point-in-time data is available.
+- **Explicit lagging**: disagreement at \(t\) predicts future volatility, not contemporaneous volatility.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    BLIND & BATTLE PROTOCOL                      │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ╔════════════════════════════════════════════════════════════╗ │
-│  ║ ROUND 1: BLIND VOTE                                        ║ │
-│  ╠════════════════════════════════════════════════════════════╣ │
-│  ║                                                            ║ │
-│  ║  Each agent receives:                                      ║ │
-│  ║  • Market data (OHLCV, returns)                            ║ │
-│  ║  • News headlines (last 24 hours)                          ║ │
-│  ║  • Macro indicators (VIX, yields, oil)                     ║ │
-│  ║                                                            ║ │
-│  ║  Each agent DOES NOT receive:                              ║ │
-│  ║  • Other agents' scores                                    ║ │
-│  ║  • Group mean or consensus                                 ║ │
-│  ║                                                            ║ │
-│  ║  OUTPUT: Initial independent beliefs                       ║ │
-│  ╚════════════════════════════════════════════════════════════╝ │
-│                          ↓                                      │
-│  ╔════════════════════════════════════════════════════════════╗ │
-│  ║ ROUND 2: BATTLE MODE                                       ║ │
-│  ╠════════════════════════════════════════════════════════════╣ │
-│  ║                                                            ║ │
-│  ║  Each agent receives:                                      ║ │
-│  ║  • Their OWN Round 1 response                              ║ │
-│  ║  • The MOST OPPOSING agent's argument only                 ║ │
-│  ║    (Found by: max |scoreᵢ - scoreⱼ|)                       ║ │
-│  ║                                                            ║ │
-│  ║  Each agent DOES NOT receive:                              ║ │
-│  ║  • Group mean (prevents herding to center)                 ║ │
-│  ║  • All other agents' responses                             ║ │
-│  ║                                                            ║ │
-│  ║  INSTRUCTION: "Critique this opposing view and             ║ │
-│  ║               defend your position"                        ║ │
-│  ║                                                            ║ │
-│  ║  OUTPUT: Final refined beliefs (with disagreement signal)  ║ │
-│  ╚════════════════════════════════════════════════════════════╝ │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Why This Design?
-
-| Design Choice | Problem It Solves | Result |
-|---------------|-------------------|--------|
-| **No mean shown** | Agents converge to avoid conflict | Preserves disagreement |
-| **Opposing argument only** | Information overload | Focused critique |
-| **"Defend your position"** | Agents simply accept critique | Maintains diversity |
-| **2 rounds optimal** | Too many rounds = convergence | Signal-to-noise balance |
+If any data source cannot satisfy these constraints, it should be disabled or clearly labeled as exploratory only.
 
 ---
 
-## Belief Agents Deep Dive
+## Agent and Debate Protocol
 
-### Agent Output Format
+The project uses a two-stage protocol to preserve meaningful disagreement:
 
-All agents output a structured JSON response:
+1. **Blind Round**: each agent predicts independently from shared date-safe context.
+2. **Critique Round**: each agent is shown an opposing argument and may revise with justification.
 
-```json
-{
-  "score": 0.45,
-  "confidence": 0.78,
-  "reasoning": "Brief explanation of the analysis..."
-}
-```
+Agents output:
 
-| Field | Range | Meaning |
-|-------|-------|---------|
-| `score` | [-1, +1] | Market direction belief (-1 = very bearish, +1 = very bullish) |
-| `confidence` | [0, 1] | How confident the agent is in their assessment |
-| `reasoning` | String | Explanation of the logic behind the score |
+- `score` in [-1, 1]
+- `confidence` in [0, 1]
+- `reasoning` (auditable text)
+
+This creates an interpretable social signal rather than a simple average opinion.
 
 ---
 
-### 1. Sentiment Agent
+## Disagreement Signal
 
-**Purpose**: Analyzes short-term crowd psychology and news sentiment.
+Primary signal:
 
-**System Prompt**:
-```
-You are a high-frequency news sentiment analyst specializing in 
-the Semiconductor sector.
+- **Confidence-weighted variance** of agent scores (`disagreement_conf`)
 
-TASK: Analyze the provided news headlines from the LAST 24 HOURS.
-OBJECTIVE: Determine if the overnight news cycle will trigger 
-immediate volatility for NVDA's trading session TODAY.
-```
+Useful companion diagnostics:
 
-**Input Data**:
-- News headlines (last 24 hours from RSS feeds)
-- Market narratives and themes
-- Fear/greed indicators
-
-**Scoring Logic**:
-| Score | Trigger |
-|-------|---------|
-| -1.0 to -0.5 | "Crypto Winter" headlines, analyst downgrades, inventory oversupply |
-| 0.0 | Routine announcements, product recaps, unrelated news |
-| +0.5 to +1.0 | "Crypto Recovery" signs, data center orders, analyst upgrades |
-
-**Unique Perspective**: Focuses on **immediate momentum**—what is the psychological state of the market *right now*?
+- mean score,
+- average confidence,
+- pairwise disagreement/correlation,
+- disagreement change (first difference).
 
 ---
 
-### 2. Technical Agent
+## Modeling and Evaluation
 
-**Purpose**: Analyzes price action, trends, and momentum signals.
+### Baseline
 
-**System Prompt**:
-```
-You are a swing trading technical analyst focused on daily momentum.
+- Standard volatility model on returns only.
 
-TASK: Analyze the price action of the PREVIOUS TRADING DAY.
-OBJECTIVE: Predict volatility for the UPCOMING SESSION based on 
-yesterday's close.
-```
+### Disagreement-augmented model
 
-**Input Data**:
-- OHLCV data (Open, High, Low, Close, Volume)
-- 5-day price returns
-- 20-day realized volatility
-- Daily range and candle patterns
+- Baseline + disagreement-derived feature(s), with explicit lag structure.
 
-**Scoring Logic**:
-| Score | Pattern |
-|-------|---------|
-| -1.0 to -0.5 | Bearish Engulfing, closing near lows, resistance rejection |
-| 0.0 | Doji (indecision), inside day, tight range consolidation |
-| +0.5 to +1.0 | Bullish Engulfing, closing near highs, gap up on volume |
+### Evaluation protocol (recommended)
 
-**Unique Perspective**: Focuses on **continuation vs. mean reversion**—does yesterday's pattern predict follow-through?
+- train/test split by time,
+- rolling one-step-ahead forecasts in test period,
+- compare OOS metrics:
+  - RMSE
+  - MAE
+  - QLIKE
+- optionally add Diebold–Mariano or bootstrap difference tests.
 
----
+### Publication-safe interpretation
 
-### 3. Macro Agent
+A model is considered better only if improvements are:
 
-**Purpose**: Analyzes macroeconomic conditions and risk sentiment.
-
-**System Prompt**:
-```
-You are a macro-risk analyst monitoring daily liquidity and 
-sector rotation.
-
-TASK: Analyze the DAILY % CHANGE in the following proxies:
-1. VIX (Market Fear): >5% spike = Risk Off
-2. SOXX (Semiconductor ETF): Leading or lagging?
-3. BTC (Bitcoin): GPU mining demand proxy for 2019
-```
-
-**Input Data**:
-- VIX (^VIX) - Fear Index
-- 10-Year Treasury Yield (^TNX)
-- Crude Oil (CL=F) - Inflation/energy proxy
-- Dollar Index (DX-Y.NYB) - Liquidity proxy
-
-**Scoring Logic**:
-| Score | Condition |
-|-------|-----------|
-| -1.0 to -0.5 | VIX spiking >5%, Bitcoin crashing, broad sell-off (Risk-Off) |
-| 0.0 | Mixed signals, VIX flat, Tech flat (Neutral) |
-| +0.5 to +1.0 | VIX collapsing, Bitcoin rallying, rotation into Tech (Risk-On) |
-
-**Unique Perspective**: Focuses on **cross-asset signals**—is broad risk sentiment supporting or pressuring equities?
+1. OOS,
+2. repeated across assets/regimes,
+3. statistically non-random.
 
 ---
 
-## Data Sources & Infobots
+## Experiment Design for Professor-Grade Evidence
 
-### Data Flow Architecture
+Use this minimal matrix:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        DATA PIPELINE                            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  EXTERNAL APIs                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ yfinance                                                 │   │
-│  │ • Market OHLCV data (NVDA, etc.)                         │   │
-│  │ • VIX, Treasury yields, Oil, Dollar Index                │   │
-│  │ • Historical prices with no look-ahead bias              │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ News RSS Feeds                                           │   │
-│  │ • Google News RSS: "/rss/search?q={ticker}"              │   │
-│  │ • Yahoo Finance RSS                                      │   │
-│  │ • Fallback: Pre-formatted headlines from local CSV       │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  INFOBOTS (Data Injection Agents)                               │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ MacroInfobot                                             │   │
-│  │ • Fetches VIX, TNX, Oil, Dollar from yfinance            │   │
-│  │ • Formats as context string for agents                   │   │
-│  │ • Caches results to avoid redundant API calls            │   │
-│  │                                                          │   │
-│  │ Output format:                                           │   │
-│  │ MACRO DATA:                                              │   │
-│  │ - VIX (Fear Index): 18.45                                │   │
-│  │ - 10Y Yield: 4.25%                                       │   │
-│  │ - Oil: $75.30                                            │   │
-│  │ - DXY (Dollar): 102.50                                   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ FundamentalInfobot (DISABLED)                            │   │
-│  │                                                          │   │
-│  │ ⚠️⚠️ Disabled to prevent look-ahead bias!               │   │
-│  │                                                          │   │
-│  │ Using yfinance.info to fetch current P/E ratios for      │   │
-│  │ historical dates would use 2024 data to predict 2019     │   │
-│  │ volatility, which invalidates the experiment.            │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+- **Assets**: multiple equities + index proxy (e.g., NVDA, AAPL, MSFT, SPY)
+- **Regimes**: at least 3 distinct periods (calm, crisis, recovery/rate cycle)
+- **Frequencies**: daily signal construction with consistent forecast horizon
+- **Outputs**:
+  1. per-asset OOS table,
+  2. regime-wise performance table,
+  3. aggregate win-rate summary,
+  4. failure-case analysis.
 
-### Look-Ahead Bias Prevention
-
-The framework is carefully designed to prevent future information from leaking into predictions:
-
-| Data Type | Safety Mechanism |
-|-----------|------------------|
-| Market data | Only data `<= current_date` is used |
-| News headlines | Filtered to `published_date <= current_date` |
-| Macro indicators | Fetched for historical date, not current |
-| Fundamentals | **Disabled entirely** (yfinance.info is always "current") |
+If disagreement helps only one ticker/period, report that honestly as a conditional finding.
 
 ---
 
-## Disagreement Metrics
+## Repository Structure
 
-### Primary Metric: D_conf (Confidence-Weighted Variance)
-
-This is the main signal used for volatility prediction:
-
-```
-D_conf = Σ(cᵢ × (sᵢ - μ)²) / Σ(cᵢ)
-
-Where:
-  cᵢ = Confidence of agent i
-  sᵢ = Score of agent i
-  μ  = Confidence-weighted mean score
-```
-
-**Interpretation**:
-- **High D_conf**: Agents with high confidence disagree strongly → Market confusion → Higher volatility expected
-- **Low D_conf**: Agents agree or low-confidence outliers → Clear consensus → Lower volatility expected
-
-### Secondary Metrics
-
-| Metric | Formula | Purpose |
-|--------|---------|---------|
-| `mean_score` | μ = Σ(cᵢ × sᵢ) / Σ(cᵢ) | Overall market sentiment direction |
-| `avg_confidence` | Mean of all confidence values | How certain agents are overall |
-| `semantic_divergence` | 1 - cosine_similarity(embeddings) | Divergence in reasoning (NLP-based) |
-
-### Example Calculation
-
-```
-Agent Outputs:
-  Sentiment:  score = +0.6, confidence = 0.8
-  Technical:  score = -0.3, confidence = 0.7
-  Macro:      score = +0.2, confidence = 0.9
-
-Step 1: Confidence-weighted mean
-  μ = (0.8×0.6 + 0.7×(-0.3) + 0.9×0.2) / (0.8 + 0.7 + 0.9)
-  μ = (0.48 - 0.21 + 0.18) / 2.4 = 0.1875
-
-Step 2: Confidence-weighted variance
-  D_conf = [0.8×(0.6-0.1875)² + 0.7×(-0.3-0.1875)² + 0.9×(0.2-0.1875)²] / 2.4
-  D_conf = [0.136 + 0.166 + 0.0001] / 2.4 = 0.126
-
-Result: Moderate disagreement (D_conf ≈ 0.13)
+```text
+market-volatility-using-multiple-LLMS/
+├── README.md
+├── requirements.txt
+├── scripts/
+│   └── import_kaggle.py
+└── src/
+    ├── agents.py          # Belief agents (sentiment/technical/macro)
+    ├── aggregator.py      # Disagreement aggregation + critique formatting
+    ├── analysis.py        # Volatility modeling + evaluation + visualization
+    ├── backtest.py        # Daily debate backtest runner
+    ├── config.py          # Config (tickers, dates, model settings, paths)
+    ├── data_loader.py     # Market/news loading + context formatting
+    ├── debate_engine.py   # Blind & critique orchestration
+    ├── disagreement.py    # Disagreement metrics
+    └── infobots.py        # Structured macro/fundamental context injectors
 ```
 
 ---
 
-## GARCH-X Volatility Modeling
+## Setup
 
-### Model Specification
-
-**Baseline GARCH(1,1)**:
-```
-σ²_t = ω + α × ε²_{t-1} + β × σ²_{t-1}
-```
-
-**GARCH-X with Disagreement**:
-```
-Mean Equation: r_t = μ + γ × D_conf_{t-1} + ε_t
-Variance: σ²_t = ω + α × ε²_{t-1} + β × σ²_{t-1}
-
-Where:
-  γ = Exogenous coefficient (captures D_conf impact)
-  D_conf_{t-1} = Lagged disagreement (prediction, not contemporaneous)
-```
-
-### Model Comparison Metrics
-
-| Metric | Meaning | Better Model Has |
-|--------|---------|------------------|
-| **AIC** | Akaike Information Criterion | Lower value |
-| **BIC** | Bayesian Information Criterion | Lower value |
-| **RMSE** | Root Mean Square Error | Lower value |
-| **MAE** | Mean Absolute Error | Lower value |
-| **p-value** | Significance of γ (exogenous coef) | < 0.05 |
-
-### Expected Results
-
-```
-============================================================
-              EXECUTIVE SUMMARY (RMSE TEST)
-============================================================
-1. Standard GARCH RMSE: 0.012345
-2. Agent GARCH-X RMSE:  0.012234 (Lower is Better)
-
-VERDICT:
-[X] SUCCESS: Agents reduced error by 0.90%.
-[ ] FAILURE: Standard model was more accurate.
-============================================================
-```
-
----
-
-## Output Visualizations
-
-The analysis module generates multiple visualization files:
-
-| File | Description |
-|------|-------------|
-| `output/results.png` | 3-panel dashboard (time series, scatter, boxplots) |
-| `output/fig1_disagreement.png` | Scatter: D_conf vs Forward Volatility |
-| `output/fig2_mean_score.png` | Scatter: Mean Score vs Forward Volatility |
-| `output/fig3_timeline.png` | Timeline: Mean Score bars + Price overlay |
-| `output/mean_score_vs_realized_volatility_timeseries.png` | Dual-axis time series: μt vs σᴿⱽ |
-| `output/topology.png` | Blind & Battle protocol diagram |
-| `output/residuals.png` | GARCH residual diagnostics (4-panel) |
-
-### Key Visualizations Explained
-
-**1. Disagreement vs Forward Volatility (fig1_disagreement.png)**
-- X-axis: D_conf (agent disagreement)
-- Y-axis: 5-day forward realized volatility
-- Red trendline: Linear regression
-- Goal: Positive slope indicates disagreement predicts volatility
-
-**2. Mean Score Timeline (fig3_timeline.png)**
-- Left axis: Mean score bars (green = bullish, red = bearish)
-- Right axis: Stock price line
-- Panic zones: Highlighted when score < -0.3
-
-**3. GARCH Residuals (residuals.png)**
-- Top row: Standardized residuals for both models
-- Bottom left: Histogram comparing residual distributions
-- Bottom right: Q-Q plot vs normal distribution
-
----
-
-## Installation & Setup
-
-### Prerequisites
-
-- Python 3.10+
-- Ollama (for local LLM) or Groq API key (for cloud)
-
-### Step-by-Step Installation
-
-```powershell
-# 1. Clone the repository
-git clone https://github.com/Nikshay1/market-volatility-using-multiple-LLMS.git
-cd market-volatility-using-multiple-LLMS
-
-# 2. Create virtual environment
-python -m venv venv
-venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
-
-# 3. Install dependencies
+```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# 4. Start Ollama (if using local LLM)
-ollama serve
-# In another terminal: ollama pull mistral
-
-# 5. (Optional) Set API keys
-$env:FRED_API_KEY = "your-fred-api-key"
-$env:GROQ_API_KEY = "your-groq-api-key"  # If using cloud
 ```
 
-### LLM Backend Options
+### Environment variables
 
-**Option 1: Ollama (Local) - Recommended**
-```powershell
-# Start Ollama server
-ollama serve
+```bash
+# Choose one backend
+export LLM_BACKEND=ollama
+# or
+export LLM_BACKEND=groq
 
-# Pull a model
-ollama pull mistral
+# If using Groq
+export GROQ_API_KEY="your_key"
 
-# The system will automatically use Ollama
-```
-
-**Option 2: Groq (Cloud)**
-```powershell
-# Set environment variable
-$env:LLM_BACKEND = "groq"
-$env:GROQ_API_KEY = "your-api-key"
-
-# Run any command as normal
-python -m src.backtest --test --days 3
+# Optional
+export FRED_API_KEY="your_fred_key"
 ```
 
 ---
 
 ## Command Reference
 
-### Backtest Commands
+### 1) Quick backtest smoke test
 
-```powershell
-# Quick test (3 days)
+```bash
 python -m src.backtest --test --days 3
+```
 
-# Full backtest (all configured tickers/dates)
+### 2) Full backtest
+
+```bash
 python -m src.backtest
-
-# Single ticker
-python -m src.backtest --ticker NVDA
-
-# Resume interrupted backtest
-python -m src.backtest --resume 2019-06-01
-
-# Compare debate round configurations
-python -m src.backtest --compare-rounds
-
-# Custom rounds
-python -m src.backtest --rounds 3
 ```
 
-### Analysis Commands
+### 3) Run analysis
 
-```powershell
-# Run full analysis pipeline
+```bash
 python -m src.analysis
-
-# This will:
-# 1. Load disagreement signals from data/disagreement_signals.csv
-# 2. Load market data from data/raw_market_data.csv
-# 3. Compute forward volatility
-# 4. Run correlation analysis
-# 5. Fit GARCH and GARCH-X models
-# 6. Generate all visualizations in output/
 ```
 
-### Individual Module Tests
+### 4) Compare debate round counts
 
-```powershell
-# Test debate engine
-python -m src.debate_engine
-
-# Test data loader
-python -m src.data_loader
-
-# Test agents
-python -m src.agents
-
-# Test disagreement metrics
-python -m src.disagreement
-
-# Test infobots
-python -m src.infobots
+```bash
+python -m src.backtest --compare-rounds --days 5
 ```
 
 ---
 
-## File Structure
+## Outputs and Artifacts
 
-```
-market-volatility-using-multiple-LLMS/
-├── src/
-│   ├── __init__.py           # Package initialization
-│   ├── config.py             # All configuration settings
-│   ├── agents.py             # Belief agents (Sentiment, Technical, Macro)
-│   ├── aggregator.py         # Statistics computation, opposing argument formatting
-│   ├── analysis.py           # GARCH modeling, correlations, visualization
-│   ├── backtest.py           # Main backtest loop with resume capability
-│   ├── data_loader.py        # Market data, news fetching, context formatting
-│   ├── debate_engine.py      # Blind & Battle protocol implementation
-│   ├── disagreement.py       # Disagreement metric calculations
-│   └── infobots.py           # Data injection agents (MacroInfobot)
-├── data/
-│   ├── raw_market_data.csv   # Fetched OHLCV data
-│   ├── disagreement_signals.csv  # Backtest results
-│   └── cache/                # Cached LLM responses
-├── output/
-│   ├── results.png           # Main dashboard
-│   ├── fig1_disagreement.png # Scatter plot
-│   ├── fig2_mean_score.png   # Mean score scatter
-│   ├── fig3_timeline.png     # Timeline chart
-│   ├── mean_score_vs_realized_volatility_timeseries.png
-│   ├── topology.png          # Protocol diagram
-│   └── residuals.png         # GARCH diagnostics
-├── requirements.txt          # Python dependencies
-├── commands.md               # Quick command reference
-├── locallyLLM.md            # Ollama setup guide
-├── fredapi_usage.md         # FRED API documentation
-└── Final_README.md          # This file
-```
+Typical artifacts:
+
+- `data/raw_market_data.csv`
+- `data/disagreement_signals.csv`
+- figures under `output/`
+
+For reproducible research reports, also export:
+
+- OOS forecast series by date,
+- per-model metric tables,
+- regime-sliced summaries.
 
 ---
 
-## Configuration Options
+## Interpreting Results
 
-All settings are in `src/config.py`:
+### Strong positive result
 
-### LLM Configuration
+- OOS disagreement model beats baseline in most assets/regimes,
+- significance tests support non-random improvement,
+- effect direction aligns with hypothesis (higher disagreement -> higher future vol).
 
-```python
-# Backend selection
-LLM_BACKEND = "ollama"  # or "groq"
+### Mixed result
 
-# Ollama settings
-OLLAMA_MODEL = "mistral"
-OLLAMA_TEMPERATURE = 0.7
-OLLAMA_MAX_TOKENS = 1024
+- improvement appears only in stress regimes or specific sectors.
 
-# Groq settings
-GROQ_MODEL = "llama-3.1-8b-instant"
-GROQ_TEMPERATURE = 0.7
-```
+### Negative result
 
-### Market Configuration
+- baseline remains stronger; disagreement behaves as noise under current setup.
 
-```python
-# Analysis period
-START_DATE = "2019-01-01"
-END_DATE = "2020-01-01"
-
-# Ticker(s) to analyze
-TICKER_LIST = ["NVDA"]
-DEFAULT_TICKER = "NVDA"
-```
-
-### Debate Configuration
-
-```python
-DEBATE_ROUNDS = 2  # Optimal for signal preservation
-NUM_BELIEF_AGENTS = 3  # Sentiment, Technical, Macro
-```
-
-### Analysis Configuration
-
-```python
-FORWARD_VOLATILITY_WINDOW = 5  # 5-day forward volatility
-TRAIN_TEST_SPLIT = 0.7  # 70% train, 30% test
-```
+A negative result is still publishable if methodology is rigorous.
 
 ---
 
-## Troubleshooting
+## Known Limitations
 
-| Issue | Solution |
-|-------|----------|
-| `FileNotFoundError: disagreement_signals.csv` | Run `python -m src.backtest` first |
-| `FileNotFoundError: raw_market_data.csv` | Run `python -m src.backtest` first |
-| `Ollama connection refused` | Run `ollama serve` in a separate terminal |
-| `Rate limit errors (Groq)` | Switch to Ollama or wait 60 seconds |
-| `GARCH fitting failed` | Need minimum 50 data points |
-| `All agents have same score` | Increase `OLLAMA_TEMPERATURE` in config |
-| `Empty visualizations` | Ensure 20+ data points in backtest results |
-
-### Common Warnings (Safe to Ignore)
-
-```
-Warning: Could not fetch yfinance macro data
-  → Falls back to default values, does not affect results
-
-Warning: Using fallback headlines
-  → RSS feeds may be rate-limited, uses cached headlines
-```
+- LLM output instability across model versions.
+- News source quality/coverage dependency.
+- Potential sensitivity to prompt wording and debate structure.
+- Forecast gains may be regime-conditional rather than universal.
 
 ---
 
-## Research References
+## Roadmap
 
-- Du, Y., Li, S., Torralba, A., Tenenbaum, J. B., & Mordatch, I. (2023). **Improving Factuality and Reasoning in Language Models through Multiagent Debate**. arXiv:2305.14325.
-
-- Bollerslev, T. (1986). **Generalized Autoregressive Conditional Heteroskedasticity**. Journal of Econometrics, 31(3), 307-327.
-
----
-
-## License
-
-MIT License - See LICENSE file for details.
+- Add formal forecast comparison tests and confidence intervals by default.
+- Add automated data quality gates (coverage, missingness, lag validation).
+- Add richer disagreement decomposition and explainability dashboard.
+- Add standardized experiment manifests for exact reproducibility.
 
 ---
 
-## Author
+## Citation / Research Reporting Note
 
-Built for research purposes. Not financial advice.
+If you use this framework in an academic submission, include:
+
+1. data coverage table,
+2. anti-leakage methodology,
+3. OOS protocol details,
+4. robustness checks,
+5. all negative/neutral findings (not only wins).
+
+That transparency is what turns a demo into research evidence.
