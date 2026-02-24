@@ -93,15 +93,21 @@ FRED_SERIES = {
 # Market Data Configuration
 # ============================================================
 
-# Multi-asset support
-# CHANGE: Switch to NVDA (NVIDIA) for analysis
-TICKER_LIST: List[str] = ["NVDA"]
-DEFAULT_TICKER: str = "NVDA"  # Default for single-ticker operations
+# Multi-asset support: cross-sector panel for robustness analysis
+TICKER_LIST: List[str] = ["AAPL", "MSFT", "NVDA", "JPM", "XOM", "UNH"]
+DEFAULT_TICKER: str = "AAPL"  # Default for single-ticker operations
 
-# Date range for analysis
-# 2019: Critical recovery year for Nvidia after the 2018 crypto-mining crash
-START_DATE: str = "2019-01-01"
-END_DATE: str = "2020-01-01"
+# Date range for panel/regime analysis
+START_DATE: str = "2018-01-01"
+END_DATE: str = "2024-12-31"
+
+# Regime buckets for subperiod robustness checks
+REGIME_WINDOWS = {
+    "pre_covid": ("2018-01-01", "2020-02-29"),
+    "covid_shock": ("2020-03-01", "2020-12-31"),
+    "post_covid": ("2021-01-01", "2021-12-31"),
+    "rate_hike_era": ("2022-01-01", "2024-12-31")
+}
 
 
 # ============================================================
@@ -143,6 +149,7 @@ DISAGREEMENT_SIGNALS_PATH: str = os.path.join(DATA_DIR, "disagreement_signals.cs
 RESULTS_PLOT_PATH: str = os.path.join(OUTPUT_DIR, "results.png")
 HEADLINE_COVERAGE_STATS_PATH: str = os.path.join(OUTPUT_DIR, "headline_coverage_stats.csv")
 DIVERSITY_REPORT_PATH: str = os.path.join(OUTPUT_DIR, "diversity_report.json")
+ROBUSTNESS_SUMMARY_PATH: str = os.path.join(OUTPUT_DIR, "robustness_summary.md")
 
 
 # ============================================================
@@ -160,6 +167,9 @@ RATE_LIMIT_DELAY: float = 1.0  # seconds between API calls
 
 FORWARD_VOLATILITY_WINDOW: int = 5  # 5-day forward realized volatility
 TRAIN_TEST_SPLIT: float = 0.7  # 70% train, 30% test
+ROBUSTNESS_ROLLING_WINDOW_DAYS: int = 60
+ROBUSTNESS_MIN_PASS_WINDOWS: int = 3
+SIGNIFICANCE_ALPHA: float = 0.05
 
 # Historical news requirements for backtests
 NEWS_LOOKBACK_DAYS: int = int(os.environ.get("NEWS_LOOKBACK_DAYS", "5"))
