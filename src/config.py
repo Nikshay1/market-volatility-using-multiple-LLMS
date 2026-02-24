@@ -117,6 +117,7 @@ DISAGREEMENT_SIGNALS_PATH: str = os.path.join(DATA_DIR, "disagreement_signals.cs
 
 # Output files
 RESULTS_PLOT_PATH: str = os.path.join(OUTPUT_DIR, "results.png")
+HEADLINE_COVERAGE_STATS_PATH: str = os.path.join(OUTPUT_DIR, "headline_coverage_stats.csv")
 
 
 # ============================================================
@@ -134,6 +135,13 @@ RATE_LIMIT_DELAY: float = 1.0  # seconds between API calls
 
 FORWARD_VOLATILITY_WINDOW: int = 5  # 5-day forward realized volatility
 TRAIN_TEST_SPLIT: float = 0.7  # 70% train, 30% test
+
+# Historical news requirements for backtests
+NEWS_LOOKBACK_DAYS: int = int(os.environ.get("NEWS_LOOKBACK_DAYS", "5"))
+NEWS_MIN_HEADLINES_PER_DAY: int = int(os.environ.get("NEWS_MIN_HEADLINES_PER_DAY", "2"))
+NEWS_DEDUP_SIMILARITY_THRESHOLD: float = float(
+    os.environ.get("NEWS_DEDUP_SIMILARITY_THRESHOLD", "0.9")
+)
 
 
 # ============================================================
