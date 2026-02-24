@@ -246,20 +246,28 @@ def fit_garch_baseline(
     test_returns = returns_pct[train_n:]
     
     try:
-        # Fit GARCH(1,1)
+        # Fit once on training segment for parameter reporting
         model = arch_model(train_returns, vol='Garch', p=1, q=1, rescale=False)
         results = model.fit(disp='off', show_warning=False)
-        
-        # Get fitted values for training (returns numpy array)
-        fitted_vol = results.conditional_volatility
-        
-        # Calculate in-sample metrics
-        realized = np.abs(train_returns) / 100
-        predicted = fitted_vol / 100
-        
-        rmse = np.sqrt(np.mean((realized - predicted) ** 2))
-        mae = np.mean(np.abs(realized - predicted))
-        
+
+        # One-step-ahead rolling forecasts over test segment
+        rolling_vol_forecasts = []
+        for i in range(len(test_returns)):
+            history = returns_pct[:train_n + i]
+            roll_model = arch_model(history, vol='Garch', p=1, q=1, rescale=False)
+            roll_results = roll_model.fit(disp='off', show_warning=False)
+            variance_fcst = roll_results.forecast(horizon=1, reindex=False).variance.values[-1, 0]
+            rolling_vol_forecasts.append(np.sqrt(max(variance_fcst, 1e-10)))
+
+        realized_vol_test = np.abs(test_returns) / 100
+        predicted_vol_test = np.array(rolling_vol_forecasts) / 100
+        realized_var_test = (test_returns / 100) ** 2
+        predicted_var_test = np.maximum(predicted_vol_test ** 2, 1e-12)
+
+        rmse = np.sqrt(np.mean((realized_vol_test - predicted_vol_test) ** 2))
+        mae = np.mean(np.abs(realized_vol_test - predicted_vol_test))
+        qlike = np.mean(np.log(predicted_var_test) + (realized_var_test / predicted_var_test))
+
         return {
             'model': model,
             'results': results,
@@ -267,9 +275,14 @@ def fit_garch_baseline(
             'bic': results.bic,
             'rmse': rmse,
             'mae': mae,
-            'train_vol': fitted_vol,
-            'test_realized': test_returns,
-            'params': dict(results.params)
+            'qlike': qlike,
+            'train_vol': results.conditional_volatility,
+            'test_realized_vol': realized_vol_test,
+            'test_realized_var': realized_var_test,
+            'test_pred_vol': predicted_vol_test,
+            'test_pred_var': predicted_var_test,
+            'params': dict(results.params),
+            'train_n': train_n
         }
         
     except Exception as e:
@@ -340,15 +353,46 @@ def fit_garch_x(
     try:
         X = sm.add_constant(model_df[['rv_l1', 'rv_l5_mean', 'd_l1', 'd_l5_mean']])
         results = sm.OLS(model_df['rv'], X).fit()
-        fitted_rv = np.maximum(results.fittedvalues.values, 1e-10)
-        fitted_vol = np.sqrt(fitted_rv)
-        
-        # Calculate in-sample metrics
-        realized = np.sqrt(model_df['rv'].values) / 100
-        predicted = fitted_vol / 100
-        
-        rmse = np.sqrt(np.mean((realized - predicted) ** 2))
-        mae = np.mean(np.abs(realized - predicted))
+
+        # One-step-ahead rolling forecasts over test segment using expanding window
+        rolling_var_forecasts = []
+        for i in range(train_n, n):
+            hist_rv = rv[:i]
+            hist_dis = exog[:i]
+            hist_df = pd.DataFrame({
+                'rv': hist_rv,
+                'rv_l1': pd.Series(hist_rv).shift(1),
+                'rv_l5_mean': pd.Series(hist_rv).shift(1).rolling(window=5).mean(),
+                'd_l1': pd.Series(hist_dis).shift(1),
+                'd_l5_mean': pd.Series(hist_dis).shift(1).rolling(window=5).mean(),
+            }).dropna()
+
+            if len(hist_df) < 30:
+                rolling_var_forecasts.append(np.nan)
+                continue
+
+            roll_X = sm.add_constant(hist_df[['rv_l1', 'rv_l5_mean', 'd_l1', 'd_l5_mean']])
+            roll_results = sm.OLS(hist_df['rv'], roll_X).fit()
+
+            feature_row = pd.DataFrame([{
+                'rv_l1': rv[i - 1],
+                'rv_l5_mean': np.mean(rv[max(0, i - 5):i]),
+                'd_l1': exog[i - 1],
+                'd_l5_mean': np.mean(exog[max(0, i - 5):i])
+            }])
+            feature_row = sm.add_constant(feature_row, has_constant='add')
+            rolling_var_forecasts.append(roll_results.predict(feature_row).iloc[0])
+
+        predicted_var_test = np.maximum(np.array(rolling_var_forecasts), 1e-12)
+        realized_var_test = rv[train_n:] / (100 ** 2)
+        predicted_var_test = predicted_var_test / (100 ** 2)
+
+        realized_vol_test = np.sqrt(realized_var_test)
+        predicted_vol_test = np.sqrt(predicted_var_test)
+
+        rmse = np.sqrt(np.mean((realized_vol_test - predicted_vol_test) ** 2))
+        mae = np.mean(np.abs(realized_vol_test - predicted_vol_test))
+        qlike = np.mean(np.log(predicted_var_test) + (realized_var_test / predicted_var_test))
         
         d_l1_coef = results.params.get('d_l1')
         d_l1_pval = results.pvalues.get('d_l1')
@@ -362,17 +406,44 @@ def fit_garch_x(
             'bic': results.bic,
             'rmse': rmse,
             'mae': mae,
-            'train_vol': fitted_vol,
+            'qlike': qlike,
+            'train_vol': np.sqrt(np.maximum(results.fittedvalues.values, 1e-10)),
+            'test_realized_vol': realized_vol_test,
+            'test_realized_var': realized_var_test,
+            'test_pred_vol': predicted_vol_test,
+            'test_pred_var': predicted_var_test,
             'params': dict(results.params),
             'd_l1_coef': d_l1_coef,
             'd_l1_pval': d_l1_pval,
             'd_l5_coef': d_l5_coef,
-            'd_l5_pval': d_l5_pval
+            'd_l5_pval': d_l5_pval,
+            'train_n': train_n
         }
         
     except Exception as e:
         print(f"Variance proxy model fitting failed: {e}")
         return None
+
+
+def diebold_mariano_test(loss_baseline: np.ndarray, loss_model: np.ndarray) -> Dict[str, float]:
+    """Diebold-Mariano test for equal predictive accuracy (1-step forecasts)."""
+    valid = np.isfinite(loss_baseline) & np.isfinite(loss_model)
+    d = np.asarray(loss_baseline[valid] - loss_model[valid])
+
+    if len(d) < 5:
+        return {'dm_stat': np.nan, 'p_value': np.nan, 'mean_loss_diff': np.nan, 'n_obs': len(d)}
+
+    mean_d = np.mean(d)
+    var_d = np.var(d, ddof=1)
+    dm_stat = mean_d / np.sqrt(var_d / len(d)) if var_d > 0 else np.nan
+    p_value = 2 * (1 - stats.t.cdf(np.abs(dm_stat), df=len(d) - 1)) if np.isfinite(dm_stat) else np.nan
+
+    return {
+        'dm_stat': dm_stat,
+        'p_value': p_value,
+        'mean_loss_diff': mean_d,
+        'n_obs': len(d)
+    }
 
 
 def create_visualization(
@@ -1227,27 +1298,26 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
             print("   Warning: Insufficient data for variance proxy fitting")
         variance_model = None
     
-    # Print RMSE Executive Summary
-    if verbose and garch_baseline and variance_model:
-        baseline_rmse = garch_baseline['rmse']
-        agent_rmse = variance_model['rmse']
-        agents_win = agent_rmse < baseline_rmse
-        error_reduction = (baseline_rmse - agent_rmse) / baseline_rmse * 100
-        
-        print("\n" + "=" * 80)
-        print("                      EXECUTIVE SUMMARY (RMSE TEST)")
-        print("=" * 80)
-        print(f"1. Standard GARCH RMSE: {baseline_rmse:.6f}")
-        print(f"2. Disagreement Variance RMSE:  {agent_rmse:.6f} (Lower is Better)")
-        print()
-        print("VERDICT:")
-        if agents_win:
-            print(f"[X] SUCCESS: Agents reduced error by {abs(error_reduction):.2f}%.")
-            print("[ ] FAILURE: Standard model was more accurate.")
-        else:
-            print("[ ] SUCCESS: Agents reduced error by X%.")
-            print(f"[X] FAILURE: Standard model was more accurate (by {abs(error_reduction):.2f}%).")
-        print("=" * 80)
+    dm_test = None
+    if garch_baseline and variance_model:
+        baseline_sq_err = (garch_baseline['test_realized_vol'] - garch_baseline['test_pred_vol']) ** 2
+        variance_sq_err = (variance_model['test_realized_vol'] - variance_model['test_pred_vol']) ** 2
+        dm_test = diebold_mariano_test(baseline_sq_err, variance_sq_err)
+
+        test_dates = merged_df['date'].iloc[garch_baseline['train_n']:].reset_index(drop=True)
+        forecast_table = pd.DataFrame({
+            'date': test_dates,
+            'realized_vol': garch_baseline['test_realized_vol'],
+            'garch_pred_vol': garch_baseline['test_pred_vol'],
+            'variance_pred_vol': variance_model['test_pred_vol'],
+            'garch_sq_error': baseline_sq_err,
+            'variance_sq_error': variance_sq_err
+        })
+        forecast_output_path = os.path.join(config.OUTPUT_DIR, 'test_forecasts.csv')
+        forecast_table.to_csv(forecast_output_path, index=False)
+
+        if verbose:
+            print(f"   Saved out-of-sample forecast table to {forecast_output_path}")
     
     # Create visualization
     if verbose:
@@ -1287,10 +1357,11 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         'correlation': correlation_results,
         'garch_baseline': garch_baseline,
         'variance_model': variance_model,
+        'dm_test': dm_test,
         'disagreement_improves_model': (
             variance_model is not None and 
             garch_baseline is not None and
-            variance_model['aic'] < garch_baseline['aic']
+            variance_model['rmse'] < garch_baseline['rmse']
         )
     }
     
@@ -1307,57 +1378,44 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
 
 
 def print_executive_summary(results: Dict) -> None:
-    """
-    Print a human-readable verdict on the Agentic Dissonance hypothesis.
-    
-    Interprets the statistical results for non-technical stakeholders:
-    - Did the model pass the test? (Yes/No)
-    - Is the signal significant? (p-value < 0.05)
-    - How much did error reduce? (RMSE improvement)
-    
-    Args:
-        results: Dictionary with analysis results
-    """
+    """Print out-of-sample predictive proof for the volatility models."""
     print("\n" + "="*80)
-    print("                      EXECUTIVE SUMMARY & VERDICT")
+    print("                EXECUTIVE SUMMARY (OUT-OF-SAMPLE PROOF)")
     print("="*80)
-    
+
     garch = results.get('garch_baseline')
     variance_model = results.get('variance_model') or results.get('garch_x')
-    corr = results.get('correlation', {})
-    
+    dm_test = results.get('dm_test') or {}
+
     if not garch or not variance_model:
         print("  FATAL ERROR: Models failed to converge.")
         return
-    
-    # Calculate key metrics
-    aic_diff = garch['aic'] - variance_model['aic']
-    is_better = aic_diff > 0
-    d_l1_p = variance_model.get('d_l1_pval', 1.0) or 1.0
-    d_l5_p = variance_model.get('d_l5_pval', 1.0) or 1.0
-    strongest_p = min(d_l1_p, d_l5_p)
-    is_significant = strongest_p < 0.05
+
     rmse_imp = (garch['rmse'] - variance_model['rmse']) / garch['rmse'] * 100
-    
-    print(f"\n1. HYPOTHESIS TEST")
-    print(f"   Did Agent Disagreement predict volatility better than price alone?")
-    if is_better and is_significant:
-        print(f"     PASSED. (Strong Evidence)")
-        print(f"      The Agentic Model is statistically superior (Lower AIC + Significant Signal).")
-    elif is_better:
-        print(f"     MIXED. (Weak Evidence)")
-        print(f"      The model fits better (Lower AIC), but disagreement lags are not significant.")
+    mae_imp = (garch['mae'] - variance_model['mae']) / garch['mae'] * 100
+    qlike_imp = (garch['qlike'] - variance_model['qlike']) / garch['qlike'] * 100
+
+    print("\n1. OUT-OF-SAMPLE FORECAST ACCURACY")
+    print(f"    Baseline GARCH    -> RMSE: {garch['rmse']:.6f}, MAE: {garch['mae']:.6f}, QLIKE: {garch['qlike']:.6f}")
+    print(f"    Disagreement Model-> RMSE: {variance_model['rmse']:.6f}, MAE: {variance_model['mae']:.6f}, QLIKE: {variance_model['qlike']:.6f}")
+
+    print("\n2. RELATIVE IMPROVEMENT (Disagreement vs Baseline)")
+    print(f"    RMSE improvement:  {rmse_imp:+.2f}%")
+    print(f"    MAE improvement:   {mae_imp:+.2f}%")
+    print(f"    QLIKE improvement: {qlike_imp:+.2f}%")
+
+    print("\n3. DIEBOLD-MARIANO TEST (Squared Error Differential)")
+    print(f"    DM statistic: {dm_test.get('dm_stat', np.nan):.4f}")
+    print(f"    p-value:      {dm_test.get('p_value', np.nan):.4f}")
+    print(f"    test obs:     {dm_test.get('n_obs', 0)}")
+
+    if np.isfinite(dm_test.get('p_value', np.nan)) and dm_test.get('p_value', 1.0) < 0.05 and rmse_imp > 0:
+        print("\nPROOF VERDICT: PASS - disagreement model improves predictive accuracy out-of-sample.")
+    elif rmse_imp > 0:
+        print("\nPROOF VERDICT: MIXED - lower out-of-sample errors, but no strong DM significance.")
     else:
-        print(f"     FAILED.")
-        print(f"      The baseline GARCH model performed better. Agents added noise.")
-    
-    print(f"\n2. DETAILED METRICS")
-    print(f"    AIC Improvement:      {aic_diff:+.2f}  (>0 implies agents added value)")
-    print(f"    D_{{t-1}} P-Value:      {d_l1_p:.4f}")
-    print(f"    mean(D_{{t-5:t-1}}) P:  {d_l5_p:.4f}")
-    print(f"    Best Lag P-Value:     {strongest_p:.4f}  (<0.05 implies variance impact)")
-    print(f"    Error Reduction:      {rmse_imp:+.2f}% (Positive means lower error)")
-    print(f"    Raw Correlation:      {corr.get('corr_disagreement_conf', 0):.4f}")
+        print("\nPROOF VERDICT: FAIL - baseline remains stronger out-of-sample.")
+
     print("="*80 + "\n")
 
 
@@ -1405,20 +1463,20 @@ def print_detailed_report(results: Dict) -> None:
         for param, value in variance_model['params'].items():
             print(f"    {param}: {value:.4f}")
         
-        print("\n  Model Improvement Metrics:")
-        aic_improvement = baseline['aic'] - variance_model['aic']
-        bic_improvement = baseline['bic'] - variance_model['bic']
+        print("\n  Model Improvement Metrics (Out-of-Sample):")
         rmse_improvement = (baseline['rmse'] - variance_model['rmse']) / baseline['rmse'] * 100
-        
-        print(f"    GARCH RMSE:      {baseline['rmse']:.6f}")
-        print(f"    Disagreement Variance RMSE:    {variance_model['rmse']:.6f}")
-        print(f"    RMSE improvement: {rmse_improvement:.2f}%")
-        print(f"    GARCH AIC:       {baseline['aic']:.2f}")
-        print(f"    Disagreement Variance AIC:     {variance_model['aic']:.2f}")
-        print(f"    AIC improvement: {aic_improvement:.2f}")
-        print(f"    GARCH BIC:       {baseline['bic']:.2f}")
-        print(f"    Disagreement Variance BIC:     {variance_model['bic']:.2f}")
-        print(f"    BIC improvement: {bic_improvement:.2f}")
+        mae_improvement = (baseline['mae'] - variance_model['mae']) / baseline['mae'] * 100
+        qlike_improvement = (baseline['qlike'] - variance_model['qlike']) / baseline['qlike'] * 100
+
+        print(f"    GARCH RMSE:                  {baseline['rmse']:.6f}")
+        print(f"    Disagreement Variance RMSE:  {variance_model['rmse']:.6f}")
+        print(f"    RMSE improvement:            {rmse_improvement:.2f}%")
+        print(f"    GARCH MAE:                   {baseline['mae']:.6f}")
+        print(f"    Disagreement Variance MAE:   {variance_model['mae']:.6f}")
+        print(f"    MAE improvement:             {mae_improvement:.2f}%")
+        print(f"    GARCH QLIKE:                 {baseline['qlike']:.6f}")
+        print(f"    Disagreement Variance QLIKE: {variance_model['qlike']:.6f}")
+        print(f"    QLIKE improvement:           {qlike_improvement:.2f}%")
 
 
 if __name__ == "__main__":
