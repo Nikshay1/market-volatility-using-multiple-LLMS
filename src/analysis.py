@@ -4,7 +4,7 @@ Statistical analysis and volatility modeling for Agentic Dissonance v2.
 Implements:
 - 5-day forward realized volatility calculation
 - Baseline GARCH(1,1) model
-- GARCH-X with disagreement as exogenous variable
+- Variance proxy model with lagged disagreement effects
 - AIC/BIC/RMSE/MAE comparison
 - Visualization of results
 """
@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import statsmodels.api as sm
 from scipy import stats
 from typing import Dict, Tuple, Optional, List
 from arch import arch_model
@@ -282,9 +283,17 @@ def fit_garch_x(
     train_size: float = None
 ) -> Dict[str, any]:
     """
-    Fit GARCH-X model with disagreement as exogenous variable.
-    
-    σ²_t = ω + α*ε²_{t-1} + β*σ²_{t-1} + γ*D_{t-1}
+    Fit a variance-impact alternative using lagged disagreement in a volatility proxy regression.
+
+    This is NOT a true GARCH-X specification in `arch` (which places exogenous terms in
+    the mean equation). Instead, it directly tests variance impact with:
+
+    RV_t = c + ϕ1*RV_{t-1} + ϕ5*mean(RV_{t-5:t-1})
+             + γ1*D_{t-1} + γ5*mean(D_{t-5:t-1}) + u_t
+
+    where RV_t = r_t^2 (returns scaled to percent). Lag structure is explicit:
+    - D_{t-1}: one-day lag of disagreement
+    - mean(D_{t-5:t-1}): rolling 5-day lag aggregate (excluding day t)
     
     Args:
         returns: Array of log returns
@@ -296,58 +305,58 @@ def fit_garch_x(
     """
     train_size = train_size or config.TRAIN_TEST_SPLIT
     
-    # Scale returns to percentage
+    # Scale returns to percentage and build realized variance proxy
     returns_pct = returns * 100
+    rv = returns_pct ** 2
     
     # Check minimum data requirement
     if len(returns_pct) < 50:
-        print(f"GARCH-X: Insufficient data ({len(returns_pct)} points, need 50+)")
+        print(f"Variance proxy model: Insufficient data ({len(returns_pct)} points, need 50+)")
         return None
-    
-    # Lag the exogenous variable (D_{t-1} predicts σ²_t)
-    exog_lagged = np.roll(exog, 1)
-    exog_lagged[0] = exog[0]  # Fill first value
     
     # Train/test split
     n = len(returns_pct)
     train_n = int(n * train_size)
     
     if train_n < 30:
-        print(f"GARCH-X: Training set too small ({train_n} points)")
+        print(f"Variance proxy model: Training set too small ({train_n} points)")
+        return None
+
+    train_rv = rv[:train_n]
+    train_dis = exog[:train_n]
+
+    model_df = pd.DataFrame({
+        'rv': train_rv,
+        'rv_l1': pd.Series(train_rv).shift(1),
+        'rv_l5_mean': pd.Series(train_rv).shift(1).rolling(window=5).mean(),
+        'd_l1': pd.Series(train_dis).shift(1),
+        'd_l5_mean': pd.Series(train_dis).shift(1).rolling(window=5).mean(),
+    }).dropna()
+
+    if len(model_df) < 30:
+        print(f"Variance proxy model: Post-lag sample too small ({len(model_df)} points)")
         return None
     
-    train_returns = returns_pct[:train_n]
-    train_exog = exog_lagged[:train_n].reshape(-1, 1)
-    
     try:
-        # Fit GARCH with exogenous regressor in the mean equation
-        # Note: arch_model 'x' parameter adds to mean, not variance
-        # For variance effect, we use a workaround with scaled exog
-        model = arch_model(train_returns, vol='Garch', p=1, q=1, 
-                          mean='ARX', lags=0, x=train_exog, rescale=False)
-        results = model.fit(disp='off', show_warning=False)
-        
-        # Get fitted values for training (returns numpy array)
-        fitted_vol = results.conditional_volatility
+        X = sm.add_constant(model_df[['rv_l1', 'rv_l5_mean', 'd_l1', 'd_l5_mean']])
+        results = sm.OLS(model_df['rv'], X).fit()
+        fitted_rv = np.maximum(results.fittedvalues.values, 1e-10)
+        fitted_vol = np.sqrt(fitted_rv)
         
         # Calculate in-sample metrics
-        realized = np.abs(train_returns) / 100
+        realized = np.sqrt(model_df['rv'].values) / 100
         predicted = fitted_vol / 100
         
         rmse = np.sqrt(np.mean((realized - predicted) ** 2))
         mae = np.mean(np.abs(realized - predicted))
         
-        # Check if exogenous coefficient is significant
-        exog_coef = None
-        exog_pval = None
-        for param_name in results.params.index:
-            if 'x' in param_name.lower() or 'exog' in param_name.lower():
-                exog_coef = results.params[param_name]
-                exog_pval = results.pvalues[param_name]
-                break
+        d_l1_coef = results.params.get('d_l1')
+        d_l1_pval = results.pvalues.get('d_l1')
+        d_l5_coef = results.params.get('d_l5_mean')
+        d_l5_pval = results.pvalues.get('d_l5_mean')
         
         return {
-            'model': model,
+            'model': 'variance_proxy_ols',
             'results': results,
             'aic': results.aic,
             'bic': results.bic,
@@ -355,12 +364,14 @@ def fit_garch_x(
             'mae': mae,
             'train_vol': fitted_vol,
             'params': dict(results.params),
-            'exog_coef': exog_coef,
-            'exog_pval': exog_pval
+            'd_l1_coef': d_l1_coef,
+            'd_l1_pval': d_l1_pval,
+            'd_l5_coef': d_l5_coef,
+            'd_l5_pval': d_l5_pval
         }
         
     except Exception as e:
-        print(f"GARCH-X fitting failed: {e}")
+        print(f"Variance proxy model fitting failed: {e}")
         return None
 
 
@@ -368,7 +379,7 @@ def create_visualization(
     df: pd.DataFrame,
     correlation_results: Dict,
     garch_baseline: Dict,
-    garch_x: Dict,
+    variance_model: Dict,
     save_path: str = None
 ) -> None:
     """
@@ -383,7 +394,7 @@ def create_visualization(
         df: Merged DataFrame
         correlation_results: Correlation analysis results
         garch_baseline: Baseline GARCH results
-        garch_x: GARCH-X results
+        variance_model: Variance model results
         save_path: Path to save the figure
     """
     save_path = save_path or config.RESULTS_PLOT_PATH
@@ -998,27 +1009,27 @@ def create_topology_figure(save_path: str = None) -> None:
 
 def create_residuals_figure(
     garch_baseline: Dict,
-    garch_x: Dict,
+    variance_model: Dict,
     save_path: str = None
 ) -> None:
     """
-    Create GARCH Residual Diagnostics: Baseline vs GARCH-X comparison.
+    Create residual diagnostics: baseline GARCH vs disagreement-variance proxy.
     
     Four-panel plot showing:
     - Top Left: Baseline GARCH standardized residuals
-    - Top Right: GARCH-X standardized residuals
+    - Top Right: Variance proxy residuals
     - Bottom Left: Residual histograms comparison
     - Bottom Right: Q-Q plots comparison
     
     Args:
         garch_baseline: Baseline GARCH results dictionary
-        garch_x: GARCH-X results dictionary
+        variance_model: Variance model results dictionary
         save_path: Path to save the figure (default: output/residuals.png)
     """
     save_path = save_path or os.path.join(config.OUTPUT_DIR, "residuals.png")
     
     # Check if models are available
-    if garch_baseline is None or garch_x is None:
+    if garch_baseline is None or variance_model is None:
         print("Warning: GARCH models not available, skipping residuals plot")
         return
     
@@ -1026,13 +1037,16 @@ def create_residuals_figure(
     plt.style.use('seaborn-v0_8-whitegrid')
     
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle('GARCH Residual Diagnostics: Baseline vs GARCH-X', 
+    fig.suptitle('Residual Diagnostics: Baseline GARCH vs Variance Proxy', 
                  fontsize=14, fontweight='bold', y=0.98)
     
     # Get standardized residuals from both models
     try:
-        baseline_resid = garch_baseline['results'].std_resid
-        garchx_resid = garch_x['results'].std_resid
+        baseline_resid = np.asarray(garch_baseline['results'].std_resid)
+        vm_results = variance_model['results']
+        vm_raw_resid = np.asarray(vm_results.resid)
+        vm_resid_std = np.std(vm_raw_resid) + 1e-10
+        garchx_resid = vm_raw_resid / vm_resid_std
     except (KeyError, AttributeError) as e:
         print(f"Warning: Could not extract residuals: {e}")
         plt.close()
@@ -1056,13 +1070,13 @@ def create_residuals_figure(
              transform=ax1.transAxes, fontsize=9, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
-    # === Panel 2 (Top Right): GARCH-X Residuals Time Series ===
+    # === Panel 2 (Top Right): Variance proxy residuals time series ===
     ax2 = axes[0, 1]
     ax2.plot(garchx_resid, color='darkorange', alpha=0.7, linewidth=0.8)
     ax2.axhline(y=0, color='black', linestyle='-', linewidth=1)
     ax2.axhline(y=2, color='red', linestyle='--', linewidth=1, alpha=0.5)
     ax2.axhline(y=-2, color='red', linestyle='--', linewidth=1, alpha=0.5)
-    ax2.set_title('GARCH-X Standardized Residuals', fontsize=11, fontweight='bold')
+    ax2.set_title('Variance Proxy Standardized Residuals', fontsize=11, fontweight='bold')
     ax2.set_xlabel('Observation', fontsize=10)
     ax2.set_ylabel('Standardized Residual', fontsize=10)
     ax2.set_ylim(-5, 5)
@@ -1080,7 +1094,7 @@ def create_residuals_figure(
     ax3.hist(baseline_resid, bins=bins, alpha=0.5, color='steelblue', 
              label=f'Baseline (σ={baseline_std:.2f})', density=True, edgecolor='white')
     ax3.hist(garchx_resid, bins=bins, alpha=0.5, color='darkorange', 
-             label=f'GARCH-X (σ={garchx_std:.2f})', density=True, edgecolor='white')
+             label=f'Variance Proxy (σ={garchx_std:.2f})', density=True, edgecolor='white')
     
     # Add normal distribution overlay
     x = np.linspace(-4, 4, 100)
@@ -1101,9 +1115,9 @@ def create_residuals_figure(
     (osm_b, osr_b), (slope_b, intercept_b, r_b) = probplot(baseline_resid, dist="norm")
     ax4.scatter(osm_b, osr_b, alpha=0.5, s=20, color='steelblue', label='Baseline')
     
-    # Q-Q for GARCH-X
+    # Q-Q for variance proxy model
     (osm_x, osr_x), (slope_x, intercept_x, r_x) = probplot(garchx_resid, dist="norm")
-    ax4.scatter(osm_x, osr_x, alpha=0.5, s=20, color='darkorange', label='GARCH-X')
+    ax4.scatter(osm_x, osr_x, alpha=0.5, s=20, color='darkorange', label='Variance Proxy')
     
     # Reference line
     xlim = ax4.get_xlim()
@@ -1115,7 +1129,7 @@ def create_residuals_figure(
     ax4.legend(loc='lower right', fontsize=9)
     
     # Add R² annotation
-    ax4.text(0.02, 0.98, f'Baseline R²: {r_b**2:.4f}\nGARCH-X R²: {r_x**2:.4f}', 
+    ax4.text(0.02, 0.98, f'Baseline R²: {r_b**2:.4f}\nVariance Proxy R²: {r_x**2:.4f}', 
              transform=ax4.transAxes, fontsize=9, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
@@ -1202,21 +1216,21 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         print("   Fitting baseline GARCH(1,1)...")
     garch_baseline = fit_garch_baseline(daily_returns)
     
-    # Fit GARCH-X with daily disagreement
+    # Fit disagreement-driven variance model
     if verbose:
-        print("   Fitting GARCH-X with disagreement...")
+        print("   Fitting disagreement-variance proxy model...")
     
     if len(daily_disagreement) > 50:
-        garch_x = fit_garch_x(daily_returns, daily_disagreement)
+        variance_model = fit_garch_x(daily_returns, daily_disagreement)
     else:
         if verbose:
-            print("   Warning: Insufficient data for GARCH-X fitting")
-        garch_x = None
+            print("   Warning: Insufficient data for variance proxy fitting")
+        variance_model = None
     
     # Print RMSE Executive Summary
-    if verbose and garch_baseline and garch_x:
+    if verbose and garch_baseline and variance_model:
         baseline_rmse = garch_baseline['rmse']
-        agent_rmse = garch_x['rmse']
+        agent_rmse = variance_model['rmse']
         agents_win = agent_rmse < baseline_rmse
         error_reduction = (baseline_rmse - agent_rmse) / baseline_rmse * 100
         
@@ -1224,7 +1238,7 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         print("                      EXECUTIVE SUMMARY (RMSE TEST)")
         print("=" * 80)
         print(f"1. Standard GARCH RMSE: {baseline_rmse:.6f}")
-        print(f"2. Agent GARCH-X RMSE:  {agent_rmse:.6f} (Lower is Better)")
+        print(f"2. Disagreement Variance RMSE:  {agent_rmse:.6f} (Lower is Better)")
         print()
         print("VERDICT:")
         if agents_win:
@@ -1239,7 +1253,7 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
     if verbose:
         print("\n7. Creating visualization...")
     
-    create_visualization(merged_df, correlation_results, garch_baseline, garch_x)
+    create_visualization(merged_df, correlation_results, garch_baseline, variance_model)
     
     # Create standalone disagreement figure (fig1_disagreement.png)
     create_disagreement_figure(merged_df, correlation_results)
@@ -1257,7 +1271,7 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
     create_topology_figure()
     
     # Create GARCH residuals diagnostic plot
-    create_residuals_figure(garch_baseline, garch_x)
+    create_residuals_figure(garch_baseline, variance_model)
     
     # Summary statistics
     if verbose:
@@ -1272,11 +1286,11 @@ def run_full_analysis(verbose: bool = True) -> Dict[str, any]:
         'merged_data': merged_df,
         'correlation': correlation_results,
         'garch_baseline': garch_baseline,
-        'garch_x': garch_x,
+        'variance_model': variance_model,
         'disagreement_improves_model': (
-            garch_x is not None and 
+            variance_model is not None and 
             garch_baseline is not None and
-            garch_x['aic'] < garch_baseline['aic']
+            variance_model['aic'] < garch_baseline['aic']
         )
     }
     
@@ -1309,19 +1323,21 @@ def print_executive_summary(results: Dict) -> None:
     print("="*80)
     
     garch = results.get('garch_baseline')
-    garch_x = results.get('garch_x')
+    variance_model = results.get('variance_model') or results.get('garch_x')
     corr = results.get('correlation', {})
     
-    if not garch or not garch_x:
+    if not garch or not variance_model:
         print("  FATAL ERROR: Models failed to converge.")
         return
     
     # Calculate key metrics
-    aic_diff = garch['aic'] - garch_x['aic']
+    aic_diff = garch['aic'] - variance_model['aic']
     is_better = aic_diff > 0
-    p_val = garch_x.get('exog_pval', 1.0) or 1.0
-    is_significant = p_val < 0.05
-    rmse_imp = (garch['rmse'] - garch_x['rmse']) / garch['rmse'] * 100
+    d_l1_p = variance_model.get('d_l1_pval', 1.0) or 1.0
+    d_l5_p = variance_model.get('d_l5_pval', 1.0) or 1.0
+    strongest_p = min(d_l1_p, d_l5_p)
+    is_significant = strongest_p < 0.05
+    rmse_imp = (garch['rmse'] - variance_model['rmse']) / garch['rmse'] * 100
     
     print(f"\n1. HYPOTHESIS TEST")
     print(f"   Did Agent Disagreement predict volatility better than price alone?")
@@ -1330,14 +1346,16 @@ def print_executive_summary(results: Dict) -> None:
         print(f"      The Agentic Model is statistically superior (Lower AIC + Significant Signal).")
     elif is_better:
         print(f"     MIXED. (Weak Evidence)")
-        print(f"      The model fits better (Lower AIC), but the signal p-value is > 0.05.")
+        print(f"      The model fits better (Lower AIC), but disagreement lags are not significant.")
     else:
         print(f"     FAILED.")
         print(f"      The baseline GARCH model performed better. Agents added noise.")
     
     print(f"\n2. DETAILED METRICS")
     print(f"    AIC Improvement:      {aic_diff:+.2f}  (>0 implies agents added value)")
-    print(f"    Signal P-Value:       {p_val:.4f}  (<0.05 implies non-random correlation)")
+    print(f"    D_{{t-1}} P-Value:      {d_l1_p:.4f}")
+    print(f"    mean(D_{{t-5:t-1}}) P:  {d_l5_p:.4f}")
+    print(f"    Best Lag P-Value:     {strongest_p:.4f}  (<0.05 implies variance impact)")
     print(f"    Error Reduction:      {rmse_imp:+.2f}% (Positive means lower error)")
     print(f"    Raw Correlation:      {corr.get('corr_disagreement_conf', 0):.4f}")
     print("="*80 + "\n")
@@ -1375,31 +1393,31 @@ def print_detailed_report(results: Dict) -> None:
             print(f"  {metric}: r={value:.4f} (p={pval:.4f}) {sig}")
     
     baseline = results.get('garch_baseline')
-    garch_x = results.get('garch_x')
+    variance_model = results.get('variance_model') or results.get('garch_x')
     
-    if baseline and garch_x:
+    if baseline and variance_model:
         print("\nGARCH Model Parameters:")
         print("\n  GARCH(1,1):")
         for param, value in baseline['params'].items():
             print(f"    {param}: {value:.4f}")
         
-        print("\n  GARCH-X:")
-        for param, value in garch_x['params'].items():
+        print("\n  Disagreement Variance Proxy:")
+        for param, value in variance_model['params'].items():
             print(f"    {param}: {value:.4f}")
         
         print("\n  Model Improvement Metrics:")
-        aic_improvement = baseline['aic'] - garch_x['aic']
-        bic_improvement = baseline['bic'] - garch_x['bic']
-        rmse_improvement = (baseline['rmse'] - garch_x['rmse']) / baseline['rmse'] * 100
+        aic_improvement = baseline['aic'] - variance_model['aic']
+        bic_improvement = baseline['bic'] - variance_model['bic']
+        rmse_improvement = (baseline['rmse'] - variance_model['rmse']) / baseline['rmse'] * 100
         
         print(f"    GARCH RMSE:      {baseline['rmse']:.6f}")
-        print(f"    GARCH-X RMSE:    {garch_x['rmse']:.6f}")
+        print(f"    Disagreement Variance RMSE:    {variance_model['rmse']:.6f}")
         print(f"    RMSE improvement: {rmse_improvement:.2f}%")
         print(f"    GARCH AIC:       {baseline['aic']:.2f}")
-        print(f"    GARCH-X AIC:     {garch_x['aic']:.2f}")
+        print(f"    Disagreement Variance AIC:     {variance_model['aic']:.2f}")
         print(f"    AIC improvement: {aic_improvement:.2f}")
         print(f"    GARCH BIC:       {baseline['bic']:.2f}")
-        print(f"    GARCH-X BIC:     {garch_x['bic']:.2f}")
+        print(f"    Disagreement Variance BIC:     {variance_model['bic']:.2f}")
         print(f"    BIC improvement: {bic_improvement:.2f}")
 
 
