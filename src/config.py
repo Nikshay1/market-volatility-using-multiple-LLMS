@@ -94,12 +94,12 @@ FRED_SERIES = {
 # ============================================================
 
 # Multi-asset support: cross-sector panel for robustness analysis
-TICKER_LIST: List[str] = ["AAPL", "MSFT", "NVDA", "JPM", "XOM", "UNH"]
-DEFAULT_TICKER: str = "AAPL"  # Default for single-ticker operations
+TICKER_LIST: List[str] = ["NVDA"]
+DEFAULT_TICKER: str = "NVDA"  # Default for single-ticker operations
 
 # Date range for panel/regime analysis
 START_DATE: str = "2018-01-01"
-END_DATE: str = "2024-12-31"
+END_DATE: str = "2020-06-10"
 
 # Regime buckets for subperiod robustness checks
 REGIME_WINDOWS = {
@@ -173,7 +173,7 @@ SIGNIFICANCE_ALPHA: float = 0.05
 
 # Historical news requirements for backtests
 NEWS_LOOKBACK_DAYS: int = int(os.environ.get("NEWS_LOOKBACK_DAYS", "5"))
-NEWS_MIN_HEADLINES_PER_DAY: int = int(os.environ.get("NEWS_MIN_HEADLINES_PER_DAY", "2"))
+NEWS_MIN_HEADLINES_PER_DAY: int = int(os.environ.get("NEWS_MIN_HEADLINES_PER_DAY", "1"))
 NEWS_DEDUP_SIMILARITY_THRESHOLD: float = float(
     os.environ.get("NEWS_DEDUP_SIMILARITY_THRESHOLD", "0.9")
 )

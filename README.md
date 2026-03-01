@@ -293,13 +293,30 @@ python -m src.backtest --test --days 3
 python -m src.backtest
 ```
 
-### 3) Run analysis
+### 3) Resume backtest from a specific date
+
+If the backtest is interrupted (e.g., API errors, connection loss, or manual stop), you can resume from any date without losing previous progress. All results before the resume date are preserved.
+
+```bash
+python -m src.backtest --resume 2018-03-15
+```
+
+This keeps all existing data in `data/disagreement_signals.csv` up to `2018-03-14` and restarts processing from `2018-03-15` onward.
+
+You can also combine `--resume` with other flags:
+
+```bash
+# Resume for a specific ticker with custom debate rounds
+python -m src.backtest --resume 2019-06-01 --ticker NVDA --rounds 2
+```
+
+### 4) Run analysis
 
 ```bash
 python -m src.analysis
 ```
 
-### 4) Compare debate round counts
+### 5) Compare debate round counts
 
 ```bash
 python -m src.backtest --compare-rounds --days 5
