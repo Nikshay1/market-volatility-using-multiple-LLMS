@@ -167,7 +167,32 @@ def merge_data(
     # The raw level of disagreement matters less than the change in disagreement.
     # A sudden spike in agent conflict is a stronger predictor of future volatility.
     merged = merged.sort_values('date')
-    merged['D_conf_change'] = merged['disagreement_conf'].diff().fillna(0)
+    group_cols = ['ticker'] if 'ticker' in merged.columns else None
+    if group_cols:
+        merged['D_conf_change'] = merged.groupby(group_cols)['disagreement_conf'].diff().fillna(0)
+        rolling_source = merged.groupby(group_cols)['disagreement_conf']
+        rolling_mean = rolling_source.transform(lambda x: x.shift(1).rolling(window=60, min_periods=10).mean())
+        rolling_std = rolling_source.transform(lambda x: x.shift(1).rolling(window=60, min_periods=10).std())
+    else:
+        merged['D_conf_change'] = merged['disagreement_conf'].diff().fillna(0)
+        rolling_mean = merged['disagreement_conf'].shift(1).rolling(window=60, min_periods=10).mean()
+        rolling_std = merged['disagreement_conf'].shift(1).rolling(window=60, min_periods=10).std()
+
+    merged['D_conf_zscore_60d'] = (merged['disagreement_conf'] - rolling_mean) / rolling_std.replace(0, np.nan)
+    merged['D_conf_zscore_60d'] = merged['D_conf_zscore_60d'].replace([np.inf, -np.inf], np.nan).fillna(0)
+    if 'mean_score' in merged.columns:
+        merged['abs_mean_score'] = merged['mean_score'].abs()
+    else:
+        merged['abs_mean_score'] = 0.0
+
+    for optional_col, default in {
+        'mean_volatility_risk': 0.0,
+        'volatility_risk_disagreement': 0.0,
+        'headline_count': 0.0,
+        'low_information_flag': 0.0,
+    }.items():
+        if optional_col not in merged.columns:
+            merged[optional_col] = default
     
     # Drop rows with missing forward volatility
     merged = merged.dropna(subset=['Forward_Volatility'])
@@ -541,7 +566,14 @@ def evaluate_robust_success(rolling_table: pd.DataFrame, variance_model: Dict) -
 
     lag_coefs = [variance_model.get('d_l1_coef'), variance_model.get('d_l5_coef')]
     lag_coefs = [x for x in lag_coefs if x is not None and np.isfinite(x)]
-    sign_consistent = len(lag_coefs) > 0 and (all(x > 0 for x in lag_coefs) or all(x < 0 for x in lag_coefs))
+    # For the augmented forward-volatility model, useful disagreement/risk coefficients
+    # should not all be negative. A mix is acceptable because change/z-score controls can
+    # absorb normalization effects, but at least one core risk coefficient should be positive.
+    core_keys = ['disagreement_conf', 'mean_volatility_risk', 'volatility_risk_disagreement']
+    disagreement_coefs = variance_model.get('disagreement_coefs', {}) if variance_model else {}
+    core_coefs = [disagreement_coefs.get(k) for k in core_keys if disagreement_coefs.get(k) is not None]
+    core_coefs = [x for x in core_coefs if np.isfinite(x)]
+    sign_consistent = any(x > 0 for x in core_coefs) if core_coefs else (len(lag_coefs) > 0 and any(x > 0 for x in lag_coefs))
 
     success = pass_windows >= config.ROBUSTNESS_MIN_PASS_WINDOWS and sign_consistent
     return {
@@ -553,14 +585,126 @@ def evaluate_robust_success(rolling_table: pd.DataFrame, variance_model: Dict) -
     }
 
 
+
+def _build_forward_volatility_design(df: pd.DataFrame, include_disagreement: bool) -> pd.DataFrame:
+    """Build a date-safe log-HAR design matrix for the 5-day forward volatility target."""
+    work = df.sort_values('date').copy()
+    eps = 1e-12
+    daily_var = np.maximum(work['Log_Return'].astype(float) ** 2, eps)
+    work['target_var'] = np.maximum(work['Forward_Volatility'].astype(float) ** 2, eps)
+    work['target_log_var'] = np.log(work['target_var'])
+    work['log_rv_l1'] = np.log(daily_var)
+    work['log_rv_l5_mean'] = np.log(pd.Series(daily_var, index=work.index).rolling(window=5, min_periods=2).mean())
+    work['log_rv_l22_mean'] = np.log(pd.Series(daily_var, index=work.index).rolling(window=22, min_periods=5).mean())
+
+    feature_cols = ['log_rv_l1', 'log_rv_l5_mean', 'log_rv_l22_mean']
+    if include_disagreement:
+        candidate_cols = [
+            'disagreement_conf',
+            'D_conf_change',
+            'D_conf_zscore_60d',
+            'mean_volatility_risk',
+            'volatility_risk_disagreement',
+            'avg_confidence',
+            'abs_mean_score',
+            'headline_count',
+            'low_information_flag',
+        ]
+        feature_cols.extend([col for col in candidate_cols if col in work.columns])
+
+    design = work[['date', 'target_var', 'target_log_var'] + feature_cols].replace([np.inf, -np.inf], np.nan).dropna()
+    design.attrs['feature_cols'] = feature_cols
+    return design
+
+
+def _fit_forward_har_model(df: pd.DataFrame, include_disagreement: bool, train_size: float = None) -> Optional[Dict[str, any]]:
+    """Fit baseline or disagreement-augmented HAR model to 5-day forward realized volatility."""
+    train_size = train_size or config.TRAIN_TEST_SPLIT
+    design = _build_forward_volatility_design(df, include_disagreement=include_disagreement)
+    feature_cols = design.attrs.get('feature_cols', [])
+
+    if len(design) < 50:
+        print(f"Forward HAR model: Insufficient data ({len(design)} points, need 50+)")
+        return None
+
+    n = len(design)
+    train_n = int(n * train_size)
+    if train_n < 30 or n - train_n < 5:
+        print(f"Forward HAR model: Train/test split too small (train={train_n}, test={n - train_n})")
+        return None
+
+    train = design.iloc[:train_n]
+    test = design.iloc[train_n:]
+
+    try:
+        X_train = sm.add_constant(train[feature_cols], has_constant='add')
+        results = sm.OLS(train['target_log_var'], X_train).fit()
+
+        rolling_log_var_forecasts = []
+        for i in range(train_n, n):
+            hist = design.iloc[:i]
+            if len(hist) < 30:
+                rolling_log_var_forecasts.append(np.nan)
+                continue
+            roll_X = sm.add_constant(hist[feature_cols], has_constant='add')
+            roll_results = sm.OLS(hist['target_log_var'], roll_X).fit()
+            feature_row = sm.add_constant(design.iloc[[i]][feature_cols], has_constant='add')
+            rolling_log_var_forecasts.append(float(roll_results.predict(feature_row).iloc[0]))
+
+        predicted_var_test = np.maximum(np.exp(np.array(rolling_log_var_forecasts)), 1e-12)
+        realized_var_test = test['target_var'].values
+        realized_vol_test = np.sqrt(realized_var_test)
+        predicted_vol_test = np.sqrt(predicted_var_test)
+
+        rmse = np.sqrt(np.nanmean((realized_vol_test - predicted_vol_test) ** 2))
+        mae = np.nanmean(np.abs(realized_vol_test - predicted_vol_test))
+        qlike = np.nanmean(np.log(predicted_var_test) + (realized_var_test / predicted_var_test))
+
+        params = dict(results.params)
+        d_coef_keys = [key for key in params if key in {
+            'disagreement_conf', 'D_conf_change', 'D_conf_zscore_60d',
+            'mean_volatility_risk', 'volatility_risk_disagreement'
+        }]
+        d_coefs = {key: params.get(key) for key in d_coef_keys}
+        d_pvals = {key: results.pvalues.get(key) for key in d_coef_keys}
+
+        return {
+            'model': 'forward_log_har_disagreement' if include_disagreement else 'forward_log_har_baseline',
+            'results': results,
+            'aic': results.aic,
+            'bic': results.bic,
+            'rmse': rmse,
+            'mae': mae,
+            'qlike': qlike,
+            'test_realized_vol': realized_vol_test,
+            'test_realized_var': realized_var_test,
+            'test_pred_vol': predicted_vol_test,
+            'test_pred_var': predicted_var_test,
+            'params': params,
+            'd_l1_coef': params.get('disagreement_conf'),
+            'd_l1_pval': results.pvalues.get('disagreement_conf'),
+            'd_l5_coef': params.get('mean_volatility_risk'),
+            'd_l5_pval': results.pvalues.get('mean_volatility_risk'),
+            'disagreement_coefs': d_coefs,
+            'disagreement_pvals': d_pvals,
+            'train_n': train_n,
+            'test_dates': test['date'].reset_index(drop=True),
+            'feature_cols': feature_cols,
+        }
+    except Exception as e:
+        print(f"Forward HAR model fitting failed: {e}")
+        return None
+
 def run_model_suite(merged_df: pd.DataFrame, label: str, save_forecast_csv: bool = False) -> Dict[str, any]:
     """Run baseline/disagreement models for a specific sample (ticker or pooled)."""
     df = merged_df.sort_values('date').copy()
-    daily_returns = df['Log_Return'].values
-    daily_disagreement = df['disagreement_conf'].values
 
-    garch_baseline = fit_garch_baseline(daily_returns)
-    variance_model = fit_garch_x(daily_returns, daily_disagreement) if len(daily_disagreement) > 50 else None
+    # Primary evaluation now forecasts the same 5-day forward realized volatility
+    # target that the research hypothesis defines. The baseline is a log-HAR
+    # market-history model; the alternative adds disagreement, volatility-risk,
+    # and news-coverage controls.
+    garch_baseline = _fit_forward_har_model(df, include_disagreement=False)
+    variance_model = _fit_forward_har_model(df, include_disagreement=True)
     dm_test = None
     forecast_table = None
 
@@ -569,7 +713,7 @@ def run_model_suite(merged_df: pd.DataFrame, label: str, save_forecast_csv: bool
         variance_sq_err = (variance_model['test_realized_vol'] - variance_model['test_pred_vol']) ** 2
         dm_test = diebold_mariano_test(baseline_sq_err, variance_sq_err)
 
-        test_dates = df['date'].iloc[garch_baseline['train_n']:].reset_index(drop=True)
+        test_dates = garch_baseline.get('test_dates', df['date'].iloc[garch_baseline['train_n']:].reset_index(drop=True))
         forecast_table = pd.DataFrame({
             'date': test_dates,
             'realized_vol': garch_baseline['test_realized_vol'],

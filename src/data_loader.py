@@ -568,6 +568,8 @@ RECENT NEWS & HEADLINES:
 - Headline Count: {news_metadata.get('headline_count', len(news_headlines))}
 - Source Coverage: {source_summary}
 - Date Coverage: {date_summary}
+- Low Information Window: {news_metadata.get('is_low_information', False)}
+- News Lookback Days: {news_metadata.get('lookback_days', config.NEWS_LOOKBACK_DAYS)}
 {news_section}
 """
     

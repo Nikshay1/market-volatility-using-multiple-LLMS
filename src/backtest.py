@@ -164,14 +164,12 @@ def run_backtest(
                 # Fetch news (also respects no look-ahead)
                 news, news_metadata = fetch_news(ticker, date, return_metadata=True)
 
-                if news_metadata.get("is_low_information", False):
-                    if verbose:
-                        print(
-                            f"  Skipping {date.date()} for {ticker}: low-information news window "
-                            f"(threshold={news_metadata.get('threshold')}, "
-                            f"counts={news_metadata.get('date_counts', {})})"
-                        )
-                    continue
+                if news_metadata.get("is_low_information", False) and verbose:
+                    print(
+                        f"  Keeping {date.date()} for {ticker} with low-information news controls "
+                        f"(threshold={news_metadata.get('threshold')}, "
+                        f"counts={news_metadata.get('date_counts', {})})"
+                    )
                 
                 # Format context
                 context_str = format_context_for_agent(
@@ -191,13 +189,18 @@ def run_backtest(
                     "disagreement_conf": debate_result["metrics"]["disagreement_conf"],
                     "mean_score": debate_result["metrics"]["mean_score"],
                     "avg_confidence": debate_result["metrics"]["avg_confidence"],
+                    "mean_volatility_risk": debate_result["metrics"].get("mean_volatility_risk", 0.0),
+                    "volatility_risk_disagreement": debate_result["metrics"].get("volatility_risk_disagreement", 0.0),
+                    "headline_count": news_metadata.get("headline_count", len(news)),
+                    "low_information_flag": int(news_metadata.get("is_low_information", False)),
+                    "news_lookback_days": news_metadata.get("lookback_days", config.NEWS_LOOKBACK_DAYS),
                     "num_rounds": num_rounds
                 }
                 
                 # Add disagreement diagnostics (agent-level + pairwise decomposition)
                 signal = debate_result.get("disagreement_signal", {})
                 for key, value in signal.items():
-                    if key in {"disagreement_conf", "mean_score", "avg_confidence"}:
+                    if key in {"disagreement_conf", "mean_score", "avg_confidence", "mean_volatility_risk", "volatility_risk_disagreement"}:
                         continue
                     row[key] = value
 

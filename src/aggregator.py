@@ -47,25 +47,32 @@ class Aggregator:
                 "mean_score": 0.0,
                 "variance": 0.0,
                 "avg_confidence": 0.0,
+                "mean_volatility_risk": 0.0,
+                "volatility_risk_disagreement": 0.0,
                 "num_agents": 0
             }
         
-        # Extract scores and confidences
+        # Extract directional scores, volatility-risk scores, and confidences
         scores = []
+        volatility_risks = []
         confidences = []
         
         for output in agent_outputs:
             score = output.get('score', 0.0)
             confidence = output.get('confidence', 0.5)
+            volatility_risk = output.get('volatility_risk', abs(float(score)))
             
             # Validate and clamp values
             score = max(-1.0, min(1.0, float(score)))
             confidence = max(0.0, min(1.0, float(confidence)))
+            volatility_risk = max(0.0, min(1.0, float(volatility_risk)))
             
             scores.append(score)
+            volatility_risks.append(volatility_risk)
             confidences.append(confidence)
         
         scores = np.array(scores, dtype=np.float64)
+        volatility_risks = np.array(volatility_risks, dtype=np.float64)
         confidences = np.array(confidences, dtype=np.float64)
         
         # Handle edge case where all confidences are zero
@@ -80,6 +87,10 @@ class Aggregator:
         # Confidence-weighted variance: D = Σ(cᵢ × (sᵢ - μ)²) / Σ(cᵢ)
         weighted_variance = np.sum(confidences * (scores - weighted_mean) ** 2) / total_confidence
         
+        # Confidence-weighted volatility-risk level and disagreement
+        weighted_volatility_risk = np.sum(confidences * volatility_risks) / total_confidence
+        volatility_risk_variance = np.sum(confidences * (volatility_risks - weighted_volatility_risk) ** 2) / total_confidence
+
         # Average confidence
         avg_confidence = np.mean(confidences)
         
@@ -93,6 +104,8 @@ class Aggregator:
             "mean_score": float(weighted_mean),
             "variance": float(weighted_variance),
             "avg_confidence": float(avg_confidence),
+            "mean_volatility_risk": float(weighted_volatility_risk),
+            "volatility_risk_disagreement": float(volatility_risk_variance),
             "num_agents": len(agent_outputs),
             "pairwise_variance": pair_variance
         }
@@ -261,7 +274,7 @@ Reasoning: "{opponent_reasoning}"
 4. Update your score ONLY if their logic is undeniably correct.
 
 RESPOND WITH YOUR UPDATED ASSESSMENT:
-{{"score": <your score>, "confidence": <your confidence>, "reasoning": "<your critique of their argument + your defense>"}}
+{{"score": <your directional score>, "volatility_risk": <your volatility risk>, "confidence": <your confidence>, "reasoning": "<your critique of their argument + your defense>"}}
 """
     
     def get_disagreement_signal(
@@ -283,7 +296,9 @@ RESPOND WITH YOUR UPDATED ASSESSMENT:
         result = {
             "disagreement_conf": stats["variance"],
             "mean_score": stats["mean_score"],
-            "avg_confidence": stats["avg_confidence"]
+            "avg_confidence": stats["avg_confidence"],
+            "mean_volatility_risk": stats["mean_volatility_risk"],
+            "volatility_risk_disagreement": stats["volatility_risk_disagreement"]
         }
         result.update(stats.get("pairwise_variance", {}))
         
@@ -293,6 +308,7 @@ RESPOND WITH YOUR UPDATED ASSESSMENT:
             agent_name = output.get("agent_name", "").lower()
             if agent_name:
                 result[f"score_{agent_name}"] = output.get("score", 0.0)
+                result[f"volatility_risk_{agent_name}"] = output.get("volatility_risk", abs(output.get("score", 0.0)))
                 result[f"confidence_{agent_name}"] = output.get("confidence", 0.5)
         
         return result

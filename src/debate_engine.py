@@ -279,7 +279,9 @@ class DebateRoom:
             "metrics": {
                 "disagreement_conf": final_stats["variance"],
                 "mean_score": final_stats["mean_score"],
-                "avg_confidence": final_stats["avg_confidence"]
+                "avg_confidence": final_stats["avg_confidence"],
+                "mean_volatility_risk": final_stats["mean_volatility_risk"],
+                "volatility_risk_disagreement": final_stats["volatility_risk_disagreement"]
             },
             "disagreement_signal": disagreement_signal,
             "calibration": calibration_signals,
