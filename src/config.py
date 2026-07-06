@@ -5,6 +5,7 @@ Confidence-weighted multi-agent disagreement framework for volatility modeling.
 """
 
 import os
+import re
 from typing import Optional, List
 
 
@@ -31,19 +32,51 @@ OLLAMA_MAX_TOKENS: int = 1024
 # Groq API Configuration (Cloud LLM)
 # ============================================================
 
+def get_groq_api_keys() -> List[str]:
+    """Get one or more Groq API keys from environment variables."""
+    raw_values = [
+        os.environ.get("GROQ_API_KEY", ""),
+        os.environ.get("GROQ_API_KEYS", ""),
+    ]
+    keys: List[str] = []
+    for raw_value in raw_values:
+        for key in re.split(r"[,;\s]+", raw_value.strip()):
+            if key and key not in keys:
+                keys.append(key)
+    return keys
+
+
+_GROQ_API_KEY_INDEX: int = 0
+
+
 def get_groq_api_key() -> str:
-    """Get GROQ API key from environment variable."""
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
+    """Get the active Groq API key from environment variables."""
+    keys = get_groq_api_keys()
+    if not keys:
         raise ValueError(
-            "GROQ_API_KEY environment variable is not set. "
-            "Please set it with: export GROQ_API_KEY='your-api-key'"
+            "GROQ_API_KEY or GROQ_API_KEYS environment variable is not set. "
+            "Please set one before using the Groq backend."
         )
-    return api_key
+    return keys[_GROQ_API_KEY_INDEX % len(keys)]
+
+
+def rotate_groq_api_key() -> bool:
+    """Rotate to the next Groq API key, if multiple keys are configured."""
+    global _GROQ_API_KEY_INDEX
+    keys = get_groq_api_keys()
+    if len(keys) <= 1:
+        return False
+    _GROQ_API_KEY_INDEX = (_GROQ_API_KEY_INDEX + 1) % len(keys)
+    return True
+
+
+def groq_api_key_count() -> int:
+    """Return the number of configured Groq API keys."""
+    return len(get_groq_api_keys())
 
 
 GROQ_API_KEY: Optional[str] = os.environ.get("GROQ_API_KEY")
-GROQ_MODEL: str = "llama-3.1-8b-instant"
+GROQ_MODEL: str = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_TEMPERATURE: float = 0.7  # Increased to force heterogeneity
 GROQ_TOP_P: float = float(os.environ.get("GROQ_TOP_P", "0.9"))
 GROQ_MAX_TOKENS: int = 1024
@@ -132,9 +165,9 @@ EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
 # Get the project root directory
 PROJECT_ROOT: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-DATA_DIR: str = os.path.join(PROJECT_ROOT, "data")
-OUTPUT_DIR: str = os.path.join(PROJECT_ROOT, "output")
-CACHE_DIR: str = os.path.join(DATA_DIR, "cache")
+DATA_DIR: str = os.environ.get("DATA_DIR", os.path.join(PROJECT_ROOT, "data"))
+OUTPUT_DIR: str = os.environ.get("OUTPUT_DIR", os.path.join(PROJECT_ROOT, "output"))
+CACHE_DIR: str = os.environ.get("CACHE_DIR", os.path.join(DATA_DIR, "cache"))
 
 # Ensure directories exist
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -143,7 +176,10 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Data files
 RAW_MARKET_DATA_PATH: str = os.path.join(DATA_DIR, "raw_market_data.csv")
-DISAGREEMENT_SIGNALS_PATH: str = os.path.join(DATA_DIR, "disagreement_signals.csv")
+DISAGREEMENT_SIGNALS_PATH: str = os.environ.get(
+    "DISAGREEMENT_SIGNALS_PATH",
+    os.path.join(DATA_DIR, "disagreement_signals.csv")
+)
 
 # Output files
 RESULTS_PLOT_PATH: str = os.path.join(OUTPUT_DIR, "results.png")
@@ -157,8 +193,9 @@ ROBUSTNESS_SUMMARY_PATH: str = os.path.join(OUTPUT_DIR, "robustness_summary.md")
 # ============================================================
 
 API_RETRY_ATTEMPTS: int = 3
-API_RETRY_DELAY: float = 2.0  # seconds
-RATE_LIMIT_DELAY: float = 1.0  # seconds between API calls
+API_RETRY_DELAY: float = float(os.environ.get("API_RETRY_DELAY", "2.0"))
+RATE_LIMIT_DELAY: float = float(os.environ.get("RATE_LIMIT_DELAY", "1.0"))  # seconds between API calls
+BACKTEST_DAY_DELAY: float = float(os.environ.get("BACKTEST_DAY_DELAY", "12.0"))
 
 
 # ============================================================

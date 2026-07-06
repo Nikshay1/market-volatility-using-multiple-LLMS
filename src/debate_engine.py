@@ -62,18 +62,38 @@ class DebateRoom:
         # Initialize aggregator
         self.aggregator = Aggregator()
     
-    def _get_cache_path(self, date: datetime, round_num: int, agent_name: str) -> str:
+    def _cache_signature(self, agent: Agent, prompt_context: str) -> str:
+        """Build a cache signature from model, prompt, and full context."""
+        raw_signature = "\n".join([
+            config.LLM_BACKEND,
+            agent.get_backend_model(),
+            f"temperature={agent.temperature:.4f}",
+            f"top_p={agent.top_p:.4f}",
+            agent.system_prompt,
+            agent.prompt_style_hint,
+            prompt_context,
+        ])
+        return hashlib.sha1(raw_signature.encode("utf-8")).hexdigest()[:12]
+
+    def _get_cache_path(self, date: datetime, round_num: int, agent: Agent, prompt_context: str) -> str:
         """Get cache file path for an agent response."""
         date_str = date.strftime("%Y-%m-%d")
-        filename = f"{self.ticker}_{date_str}_r{round_num}_{agent_name}.json"
+        signature = self._cache_signature(agent, prompt_context)
+        filename = f"{self.ticker}_{date_str}_r{round_num}_{agent.name}_{signature}.json"
         return os.path.join(config.CACHE_DIR, filename)
     
-    def _load_cached_response(self, date: datetime, round_num: int, agent_name: str) -> Optional[Dict]:
+    def _load_cached_response(
+        self,
+        date: datetime,
+        round_num: int,
+        agent: Agent,
+        prompt_context: str
+    ) -> Optional[Dict]:
         """Load cached response if available."""
         if not self.use_cache:
             return None
         
-        cache_path = self._get_cache_path(date, round_num, agent_name)
+        cache_path = self._get_cache_path(date, round_num, agent, prompt_context)
         if os.path.exists(cache_path):
             try:
                 with open(cache_path, 'r') as f:
@@ -86,16 +106,26 @@ class DebateRoom:
                 print(f"Cache read error: {e}")
         return None
     
-    def _save_cached_response(self, date: datetime, round_num: int, agent_name: str, response: Dict):
+    def _save_cached_response(
+        self,
+        date: datetime,
+        round_num: int,
+        agent: Agent,
+        prompt_context: str,
+        response: Dict
+    ):
         """Save response to cache."""
         if not self.use_cache:
             return
         
-        cache_path = self._get_cache_path(date, round_num, agent_name)
+        cache_path = self._get_cache_path(date, round_num, agent, prompt_context)
         try:
             with open(cache_path, 'w') as f:
                 json.dump({
                     'cached_at': datetime.now().isoformat(),
+                    'backend': config.LLM_BACKEND,
+                    'model': agent.get_backend_model(),
+                    'cache_signature': self._cache_signature(agent, prompt_context),
                     'response': response
                 }, f)
         except Exception as e:
@@ -200,7 +230,7 @@ class DebateRoom:
                 
                 for agent in self.agents:
                     # Check cache first
-                    cached = self._load_cached_response(date, round_num, agent.name)
+                    cached = self._load_cached_response(date, round_num, agent, full_context)
                     if cached:
                         response = cached
                         if verbose:
@@ -209,7 +239,7 @@ class DebateRoom:
                         # NO debate context - pure blind vote
                         response = agent.generate_response(full_context, debate_context=None)
                         response['agent_name'] = agent.name  # Tag for opposing argument matching
-                        self._save_cached_response(date, round_num, agent.name, response)
+                        self._save_cached_response(date, round_num, agent, full_context, response)
                         if verbose:
                             print(f"  {agent.name}: score={response.get('score', 0):.3f}, conf={response.get('confidence', 0):.3f}")
                     
@@ -226,27 +256,28 @@ class DebateRoom:
                     print("  [CRITIQUE] Agents attacking opposing arguments...")
                 
                 for i, agent in enumerate(self.agents):
-                    # Check cache first
-                    cached = self._load_cached_response(date, round_num, agent.name)
+                    # Get this agent's Round 1 output
+                    agent_r1_output = agent_outputs[i]
+                    agent_r1_output['agent_name'] = agent.name
+
+                    # Generate OPPOSING ARGUMENT (not mean!) for this agent
+                    critique_context = self.aggregator.format_opposing_argument(
+                        agent_r1_output,
+                        agent_outputs
+                    )
+                    cache_context = f"{full_context}\n{critique_context}"
+
+                    # Check cache after the critique context is known.
+                    cached = self._load_cached_response(date, round_num, agent, cache_context)
                     if cached:
                         response = cached
                         if verbose:
                             print(f"  {agent.name}: score={response.get('score', 0):.3f} (cached)")
                     else:
-                        # Get this agent's Round 1 output
-                        agent_r1_output = agent_outputs[i]
-                        agent_r1_output['agent_name'] = agent.name
-                        
-                        # Generate OPPOSING ARGUMENT (not mean!) for this agent
-                        critique_context = self.aggregator.format_opposing_argument(
-                            agent_r1_output, 
-                            agent_outputs
-                        )
-                        
                         response = agent.generate_response(full_context, critique_context)
                         response['agent_name'] = agent.name
-                        self._save_cached_response(date, round_num, agent.name, response)
-                        
+                        self._save_cached_response(date, round_num, agent, cache_context, response)
+
                         if verbose:
                             print(f"  {agent.name}: score={response.get('score', 0):.3f}, conf={response.get('confidence', 0):.3f}")
                     

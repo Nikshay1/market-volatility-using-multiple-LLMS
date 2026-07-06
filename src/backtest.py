@@ -213,9 +213,9 @@ def run_backtest(
                 if save_intermediate:
                     _save_results(results)
                 
-                # RATE LIMITING: Sleep 12 seconds after each week to stay within API limits
-                # This allows max 5 weeks per minute (30 calls/minute) - safe for Groq free tier
-                time.sleep(12)
+                # Per-day throttle for hosted LLM APIs; keep nonzero for long Groq runs.
+                if config.BACKTEST_DAY_DELAY > 0:
+                    time.sleep(config.BACKTEST_DAY_DELAY)
                 
             except Exception as e:
                 print(f"Error processing {ticker} on {date}: {e}")

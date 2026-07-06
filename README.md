@@ -272,6 +272,16 @@ export LLM_BACKEND=groq
 
 # If using Groq
 export GROQ_API_KEY="your_key"
+# Optional comma-separated failover pool for long backtests
+export GROQ_API_KEYS="key_1,key_2,key_3"
+# Default Groq model is openai/gpt-oss-120b; override when needed
+export GROQ_MODEL="openai/gpt-oss-120b"
+
+# Optional output isolation for validation runs
+export DISAGREEMENT_SIGNALS_PATH="data/disagreement_signals_validation.csv"
+export OUTPUT_DIR="output/validation"
+export CACHE_DIR="data/cache_validation"
+export BACKTEST_DAY_DELAY="12.0"
 
 # Optional
 export FRED_API_KEY="your_fred_key"

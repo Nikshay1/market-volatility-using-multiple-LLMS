@@ -54,6 +54,7 @@ class Agent(ABC):
         self.top_p = top_p
         self.prompt_style_hint = "Use your default analytical style."
         self._groq_client = None
+        self._groq_client_api_key = None
 
     def get_backend_model(self) -> str:
         """Resolve the active model for the configured backend."""
@@ -69,9 +70,14 @@ class Agent(ABC):
     
     @property
     def groq_client(self):
-        """Lazy initialization of Groq client."""
-        if self._groq_client is None and Groq is not None:
-            self._groq_client = Groq(api_key=config.get_groq_api_key())
+        """Lazy initialization of Groq client for the active API key."""
+        active_api_key = config.get_groq_api_key()
+        if (
+            self._groq_client is None
+            or self._groq_client_api_key != active_api_key
+        ) and Groq is not None:
+            self._groq_client = Groq(api_key=active_api_key)
+            self._groq_client_api_key = active_api_key
         return self._groq_client
     
     def call_llm(self, prompt: str, max_retries: int = None) -> str:
@@ -122,13 +128,32 @@ class Agent(ABC):
         
         return ""
     
+    @staticmethod
+    def _is_groq_key_exhausted(error: Exception) -> bool:
+        """Return True for key-specific Groq failures where rotation can help."""
+        status_code = getattr(error, "status_code", None)
+        message = str(error).lower()
+        quota_terms = (
+            "rate limit",
+            "rate_limit",
+            "quota",
+            "exceeded",
+            "insufficient",
+            "invalid api key",
+            "unauthorized",
+        )
+        return status_code in {401, 403, 429} or any(term in message for term in quota_terms)
+
     def _call_groq(self, prompt: str, max_retries: int = None) -> str:
-        """Call the Groq API with retry logic."""
+        """Call the Groq API with retry logic and optional key rotation."""
         if Groq is None:
             raise ImportError("groq package not installed")
-        
+
+        key_count = max(1, config.groq_api_key_count())
         max_retries = max_retries or config.API_RETRY_ATTEMPTS
-        
+        if key_count > 1:
+            max_retries = max(max_retries, config.API_RETRY_ATTEMPTS * key_count)
+
         for attempt in range(max_retries):
             try:
                 chat_completion = self.groq_client.chat.completions.create(
@@ -142,14 +167,27 @@ class Agent(ABC):
                     max_tokens=config.GROQ_MAX_TOKENS
                 )
                 return chat_completion.choices[0].message.content
-                
+
             except Exception as e:
+                rotated = False
+                if self._is_groq_key_exhausted(e):
+                    rotated = config.rotate_groq_api_key()
+                    if rotated:
+                        self._groq_client = None
+                        self._groq_client_api_key = None
+
                 if attempt < max_retries - 1:
-                    print(f"Groq API error (attempt {attempt + 1}): {e}")
+                    if rotated:
+                        print(
+                            "Groq API key quota/rate/auth failure; "
+                            "rotating to the next configured key."
+                        )
+                    else:
+                        print(f"Groq API error (attempt {attempt + 1}): {e}")
                     time.sleep(config.API_RETRY_DELAY)
                 else:
                     raise
-        
+
         return ""
     
     def parse_json_response(self, response: str) -> Dict[str, Any]:

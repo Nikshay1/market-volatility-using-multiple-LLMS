@@ -74,6 +74,7 @@ data/*.csv
 !data/.gitkeep
 data/cache/
 data/cache/*.json
+data/cache*/
 
 # Output files
 output/
