@@ -276,6 +276,10 @@ class Agent(ABC):
         # Try to find confidence
         conf_match = re.search(r'"?confidence"?\s*[:=]\s*(\d*\.?\d+)', response)
         confidence = float(conf_match.group(1)) if conf_match else 0.5
+
+        # Try to find volatility risk; default to absolute directional score for legacy responses
+        vol_match = re.search(r'"?volatility_risk"?\s*[:=]\s*(\d*\.?\d+)', response)
+        volatility_risk = float(vol_match.group(1)) if vol_match else abs(score)
         
         # Try to find reasoning - get text between "reasoning": and the next comma or brace
         reason_match = re.search(
@@ -292,6 +296,7 @@ class Agent(ABC):
         
         return self._validate_response({
             "score": score,
+            "volatility_risk": volatility_risk,
             "confidence": confidence,
             "reasoning": reasoning
         })
@@ -300,14 +305,17 @@ class Agent(ABC):
         """Validate and clamp response values."""
         score = float(data.get('score', 0.0))
         confidence = float(data.get('confidence', 0.5))
+        volatility_risk = float(data.get('volatility_risk', abs(score)))
         reasoning = str(data.get('reasoning', ''))
         
         # Clamp values to valid ranges
         score = max(-1.0, min(1.0, score))
         confidence = max(0.0, min(1.0, confidence))
+        volatility_risk = max(0.0, min(1.0, volatility_risk))
         
         return {
             "score": score,
+            "volatility_risk": volatility_risk,
             "confidence": confidence,
             "reasoning": reasoning,
             "agent_name": self.name
@@ -349,8 +357,8 @@ class SentimentAgent(Agent):
     
     SYSTEM_PROMPT = """You are a high-frequency news sentiment analyst specializing in the Semiconductor sector.
     
-    TASK: Analyze the provided news headlines from the LAST 24 HOURS.
-    OBJECTIVE: Determine if the overnight news cycle will trigger immediate volatility for NVDA's trading session TODAY.
+    TASK: Analyze the dated headline bundle and coverage diagnostics provided in context.
+    OBJECTIVE: Estimate whether the recent news cycle will raise realized volatility over the next 5 trading days.
     
     SCORING GUIDELINES:
     - 0.0 (Neutral/Noise): Routine partnership announcements, product recaps without financial details, or unrelated sector news.
@@ -358,12 +366,13 @@ class SentimentAgent(Agent):
     - Positive (+0.5 to +1.0): "Crypto Recovery" signs, massive data center orders, new GPU architecture reveals (e.g., Ampere leaks), or analyst upgrades.
     
     CRITICAL CONSTRAINTS:
-    - IGNORE news older than 24 hours.
-    - Focus on MOMENTUM: Does this news change the psychological state of the market *right now*?
+    - Treat same-day and prior-day headlines as strongest; treat older 3-7 day lookback headlines as decayed background context.
+    - Use Headline Count and Date Coverage as evidence quality controls; low coverage should lower confidence, not force a directional view.
+    - Output both direction score and volatility_risk: volatility_risk should be high for major catalysts, conflicting narratives, or poor-but-stressful news coverage.
     
     RESPONSE FORMAT:
     Respond ONLY with valid JSON:
-    {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise summary of drivers>"}"""
+    {"score": <float between -1.0 and 1.0>, "volatility_risk": <float between 0.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise summary of drivers>"}"""
     
     def __init__(self):
         super().__init__(
@@ -392,7 +401,7 @@ class SentimentAgent(Agent):
 
 PROMPT STYLE: {self.prompt_style_hint}
 
-Based on the news and market psychology, evaluate the short-term sentiment direction."""
+Based on the news and market psychology, evaluate both short-term direction and next-5-trading-day volatility risk."""
 
         if debate_context:
             base_prompt += f"""
@@ -405,7 +414,7 @@ Maintain your independence - do not simply follow the crowd."""
         
         base_prompt += """
 
-Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
+Respond with a JSON object: {"score": <float>, "volatility_risk": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
         
         return base_prompt
 
@@ -420,8 +429,8 @@ class TechnicalAgent(Agent):
     
     SYSTEM_PROMPT = """You are a swing trading technical analyst focused on daily momentum.
     
-    TASK: Analyze the price action of the PREVIOUS TRADING DAY.
-    OBJECTIVE: Predict volatility for the UPCOMING SESSION based on yesterday's close.
+    TASK: Analyze recent price action, range, volume, trend, and volatility features.
+    OBJECTIVE: Estimate both directional pressure and next-5-trading-day volatility risk from the latest available close.
     
     SCORING GUIDELINES:
     - 0.0 (Inside Day/Consolidation): Low volume doji, trading within the previous day's range. Volatility is contracting.
@@ -434,7 +443,7 @@ class TechnicalAgent(Agent):
     
     RESPONSE FORMAT:
     Respond ONLY with valid JSON:
-    {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<technical setup description>"}"""
+    {"score": <float between -1.0 and 1.0>, "volatility_risk": <float between 0.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<technical setup description>"}"""
     
     def __init__(self):
         super().__init__(
@@ -462,7 +471,7 @@ class TechnicalAgent(Agent):
 
 PROMPT STYLE: {self.prompt_style_hint}
 
-Based on the price action and technical indicators, evaluate the trend direction."""
+Based on the price action and technical indicators, evaluate trend direction and next-5-trading-day volatility risk."""
 
         if debate_context:
             base_prompt += f"""
@@ -475,7 +484,7 @@ Maintain your independence - do not simply follow the crowd."""
         
         base_prompt += """
 
-Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
+Respond with a JSON object: {"score": <float>, "volatility_risk": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
         
         return base_prompt
 
@@ -490,21 +499,19 @@ class MacroAgent(Agent):
     
     SYSTEM_PROMPT = """You are a macro-risk analyst monitoring daily liquidity and sector rotation.
     
-    TASK: Analyze the DAILY % CHANGE in the following proxies:
-    1. VIX (Market Fear): >5% spike = Risk Off.
-    2. SOXX (Semiconductor ETF): Is the sector leading or lagging?
-    3. BTC (Bitcoin): A proxy for GPU mining demand/sentiment in 2019.
+    TASK: Analyze the macro and cross-asset proxies actually provided in context: VIX, Treasury yields, oil, dollar index, and recent return/volatility context.
     
-    OBJECTIVE: Determine if today is a "Risk-On" (Buy Tech) or "Risk-Off" (Sell Tech) session.
+    OBJECTIVE: Determine whether macro conditions point to risk-on/risk-off direction and whether they raise next-5-trading-day realized volatility risk.
     
     SCORING GUIDELINES:
-    - 0.0 (Neutral): Mixed signals (e.g., VIX flat, Tech flat).
-    - Negative (-0.5 to -1.0): VIX spiking >5%, Bitcoin crashing >5% (implies miner capitulation), or Broad market sell-off.
-    - Positive (+0.5 to +1.0): VIX collapsing, Bitcoin rallying (implies mining profitability), or Risk-on rotation into Tech/Semis.
+    - 0.0 (Neutral): Mixed or benign macro backdrop.
+    - Negative (-0.5 to -1.0): elevated/rising VIX, tighter liquidity, oil/dollar stress, or broad market sell-off.
+    - Positive (+0.5 to +1.0): easing fear/liquidity conditions or risk-on rotation into equities.
+    - volatility_risk should be high when macro stress is elevated or changing quickly, regardless of direction.
     
     RESPONSE FORMAT:
     Respond ONLY with valid JSON:
-    {"score": <float between -1.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise macro thesis>"}"""
+    {"score": <float between -1.0 and 1.0>, "volatility_risk": <float between 0.0 and 1.0>, "confidence": <float between 0.0 and 1.0>, "reasoning": "<concise macro thesis>"}"""
     
     def __init__(self):
         super().__init__(
@@ -536,7 +543,7 @@ class MacroAgent(Agent):
 
 PROMPT STYLE: {self.prompt_style_hint}
 
-Based on the macro indicators, evaluate the risk environment for equities."""
+Based on the macro indicators, evaluate the direction and next-5-trading-day volatility risk environment for equities."""
 
         if debate_context:
             base_prompt += f"""
@@ -549,7 +556,7 @@ Maintain your independence - do not simply follow the crowd."""
         
         base_prompt += """
 
-Respond with a JSON object: {"score": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
+Respond with a JSON object: {"score": <float>, "volatility_risk": <float>, "confidence": <float>, "reasoning": "<analysis>"}"""
         
         return base_prompt
 
